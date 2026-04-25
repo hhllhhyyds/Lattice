@@ -18,7 +18,7 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 |------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：三组件定义、trait 接口、数据流、生命周期 |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | 技术选型及理由 |
-| [docs/MVP_SCOPE.md](docs/MVP_SCOPE.md) | MVP 范围定义：做什么、不做什么 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 项目路线图：已完成里程碑 + 当前进展 + 未来规划 |
 | [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) | AI 编程流程规范 |
 | [tasks/](tasks/) | MVP 任务拆解，按顺序执行 |
 
