@@ -49,8 +49,11 @@ crates/
 ## 实现任务时的工作流
 
 1. 先读 `docs/ARCHITECTURE.md` 理解整体设计
-2. 确认要实现的组件在 `docs/MVP_SCOPE.md` 范围内
+2. 确认要实现的组件在 `docs/ROADMAP.md` 路线图范围内
 3. 按架构文档中的 trait 定义编写代码
-4. 写测试，确保 `cargo test` 全部通过
-5. 确保 `cargo clippy` 无警告
-6. 提交时遵守 commit 信息规范
+4. 写测试，确保以下四项全部通过：
+   - `cargo fmt --all -- --check`
+   - `cargo clippy --all-targets --all-features -- -D warnings`
+   - `cargo test --all-targets --all-features`
+   - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`
+5. 提交时遵守 commit 信息规范
