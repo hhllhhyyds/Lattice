@@ -72,5 +72,3 @@ pub struct Event {
     /// Parent event (for correlation).
     pub parent_event_id: Option<EventId>,
 }
-
-
