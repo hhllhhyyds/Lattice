@@ -322,10 +322,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "lattice-core",
- "lattice-runtime",
- "lattice-sandbox-local",
- "lattice-store-memory",
+ "lattice",
  "serde",
  "serde_json",
  "tokio",
@@ -626,6 +623,19 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "lattice"
+version = "0.1.0"
+dependencies = [
+ "lattice-core",
+ "lattice-llm-anthropic",
+ "lattice-llm-openai",
+ "lattice-llm-protocol",
+ "lattice-runtime",
+ "lattice-sandbox-local",
+ "lattice-store-memory",
 ]
 
 [[package]]
@@ -974,12 +984,7 @@ name = "real-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "lattice-core",
- "lattice-llm-anthropic",
- "lattice-llm-openai",
- "lattice-runtime",
- "lattice-sandbox-local",
- "lattice-store-memory",
+ "lattice",
  "serde_json",
  "tokio",
  "tracing",

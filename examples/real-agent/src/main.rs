@@ -18,10 +18,10 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use lattice_core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore, ToolDescription};
-use lattice_runtime::{BasicSandboxRouter, ControlLoop};
-use lattice_sandbox_local::LocalSandbox;
-use lattice_store_memory::MemoryStore;
+use lattice::core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore, ToolDescription};
+use lattice::runtime::{BasicSandboxRouter, ControlLoop};
+use lattice::sandbox_local::LocalSandbox;
+use lattice::store_memory::MemoryStore;
 use tracing::info;
 
 fn main() -> Result<()> {
@@ -65,14 +65,14 @@ async fn run(task: String) -> Result<()> {
     // Create the LLM client based on provider.
     let llm: Arc<dyn LLMClient> = match provider.as_str() {
         "anthropic" => {
-            let mut client = lattice_llm_anthropic::AnthropicClient::new(&api_key, &model);
+            let mut client = lattice::llm_anthropic::AnthropicClient::new(&api_key, &model);
             if let Some(base) = api_base {
                 client = client.with_base_url(base);
             }
             Arc::new(client)
         }
         _ => {
-            let mut client = lattice_llm_openai::OpenAIClient::new(&api_key, &model);
+            let mut client = lattice::llm_openai::OpenAIClient::new(&api_key, &model);
             if let Some(base) = api_base {
                 client = client.with_base_url(base);
             }

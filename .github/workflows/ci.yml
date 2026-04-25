@@ -11,8 +11,17 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Check (${{ matrix.features || 'default' }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""                                                          # default features
+          - "--no-default-features"                                      # core only
+          - "--all-features"                                             # all features
+          - "--no-default-features --features runtime,store-memory,sandbox-local,llm-anthropic"
+          - "--no-default-features --features runtime,store-memory,sandbox-local,llm-openai"
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +39,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test --all-targets --all-features
+      - name: Build (feature matrix)
+        run: cargo build --all-targets ${{ matrix.features }}
+
+      - name: Test (feature matrix)
+        run: cargo test --all-targets ${{ matrix.features }}
 
       - name: Doc check
         run: cargo doc --no-deps --all-features
