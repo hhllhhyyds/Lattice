@@ -7,6 +7,7 @@ Lattice 的架构灵感来自 Anthropic 的 Managed Agents 博客（*Scaling Man
 - **借鉴 OS 的抽象层**：操作系统通过 `read()` 等稳定接口屏蔽底层硬件差异。Lattice 对 Agent 运行环境做同样的事——定义稳定接口，让实现可自由替换。
 - **苦涩的教训**：不在框架中嵌入针对特定模型能力的"补丁"。模型特定的适配只能以可插拔的方式挂载。
 - **宠物 vs 牲口**：所有组件（会话、控制循环、沙箱）都是无状态/可恢复的，坏了就换，不需要"抢救"。
+- **Feature 组合，按需裁剪**：所有非核心功能（LLM 后端、沙箱实现、存储实现、HTTP 服务）通过 Rust feature flags 控制。消费者可以只编译自己需要的部分，不引入多余依赖。core crate 保持零 feature，永远是纯接口。
 
 ## 三个核心抽象
 
@@ -293,3 +294,106 @@ ControlLoop 崩溃
 - **凭据隔离**：Sandbox 实现不能直接访问 SessionStore 或 LLM 凭据
 - **初始化注入**：敏感信息只在沙箱创建阶段注入（如环境变量），运行时代码无法获取注入动作本身
 - **Vault Proxy**（未来）：第三方令牌通过外部代理注入，沙箱永远接触不到原始凭据
+
+## Feature Flag 设计
+
+### 设计原则
+
+1. **core 零 feature**：`lattice-core` 是纯接口层，不包含任何可选功能，所有消费者必须依赖它
+2. **实现 crate 独立成包**：每个实现（LLM 后端、存储后端、沙箱实现）是独立 crate，消费者通过 `Cargo.toml` 按需引入
+3. **Facade crate 提供便利**：`lattice` facade crate 通过 feature flags 重导出所有子 crate，方便"全家桶"使用
+4. **server 按需编译**：`lattice-server` 通过 feature 控制启用哪些 provider、存储和沙箱后端
+5. **默认最小化**：default feature 只包含最基础的功能，用户明确 opt-in 额外能力
+
+### Facade Crate：`lattice`
+
+```toml
+[package]
+name = "lattice"
+
+[features]
+default = ["runtime", "store-memory", "sandbox-local"]
+
+# 核心组件（总是可用，通过 lattice-core）
+runtime = ["dep:lattice-runtime"]
+
+# 存储后端
+store-memory = ["dep:lattice-store-memory"]
+# store-sqlite = ["dep:lattice-store-sqlite"]   # 未来
+# store-postgres = ["dep:lattice-store-postgres"] # 未来
+
+# 沙箱实现
+sandbox-local = ["dep:lattice-sandbox-local"]
+# sandbox-docker = ["dep:lattice-sandbox-docker"] # 未来
+
+# LLM 后端
+llm-anthropic = ["dep:lattice-llm-anthropic", "dep:lattice-llm-protocol"]
+llm-openai = ["dep:lattice-llm-openai", "dep:lattice-llm-protocol"]
+llm-all = ["llm-anthropic", "llm-openai"]
+
+# 便利组合
+full = ["runtime", "store-memory", "sandbox-local", "llm-all"]
+
+[dependencies]
+lattice-core = { path = "crates/core" }           # 始终依赖
+lattice-runtime = { path = "crates/runtime", optional = true }
+lattice-store-memory = { path = "crates/store-memory", optional = true }
+lattice-sandbox-local = { path = "crates/sandbox-local", optional = true }
+lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
+lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
+lattice-llm-openai = { path = "crates/llm-openai", optional = true }
+```
+
+### 消费者使用示例
+
+```toml
+# 只要核心 + Anthropic
+lattice = { version = "0.1", default-features = false, features = ["runtime", "store-memory", "sandbox-local", "llm-anthropic"] }
+
+# 全家桶
+lattice = { version = "0.1", features = ["full"] }
+
+# 极简：只要接口定义（写自己的实现）
+lattice = { version = "0.1", default-features = false }
+```
+
+### Server Feature Flags
+
+```toml
+[package]
+name = "lattice-server"
+
+[features]
+default = ["anthropic", "openai"]
+
+# LLM Provider
+anthropic = ["lattice-llm-anthropic"]
+openai = ["lattice-llm-openai"]
+
+# 存储后端（未来）
+# sqlite = ["lattice-store-sqlite"]
+
+# 沙箱后端（未来）
+# docker = ["lattice-sandbox-docker"]
+```
+
+### 代码中的条件编译
+
+在 server 中按 feature 注册 provider：
+
+```rust
+pub fn register_providers(registry: &mut ProviderRegistry, config: &[ProviderConfig]) {
+    for provider in config {
+        match provider.kind {
+            #[cfg(feature = "anthropic")]
+            ProviderKind::Anthropic => { /* register */ },
+
+            #[cfg(feature = "openai")]
+            ProviderKind::OpenAI => { /* register */ },
+
+            #[allow(unreachable_patterns)]
+            _ => tracing::warn!("Provider {:?} not enabled at compile time", provider.kind),
+        }
+    }
+}
+```
