@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::event::SessionId;
 
 /// Error from the session store.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub enum StoreError {
     /// The requested session does not exist.
@@ -22,7 +22,7 @@ pub enum StoreError {
 }
 
 /// Error from the LLM client.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub enum LLMError {
     /// The LLM request failed (network, timeout, etc.).
@@ -37,7 +37,7 @@ pub enum LLMError {
 }
 
 /// Error from the sandbox.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub enum SandboxError {
     /// Tool execution failed (non-zero exit code or panic).
@@ -55,7 +55,7 @@ pub enum SandboxError {
 }
 
 /// Error from the sandbox router.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub enum RouterError {
     /// No suitable sandbox is available for the requested tool.
