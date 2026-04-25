@@ -1,3 +1,45 @@
+[package]
+name = "lattice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "A Rust meta-framework for building AI agents, inspired by Anthropic's managed agents architecture."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["runtime", "store-memory", "sandbox-local"]
+
+# Core runtime
+runtime = ["dep:lattice-runtime"]
+
+# Store backends
+store-memory = ["dep:lattice-store-memory"]
+
+# Sandbox implementations
+sandbox-local = ["dep:lattice-sandbox-local"]
+
+# LLM backends
+llm-protocol = ["dep:lattice-llm-protocol"]
+llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
+llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
+llm-all = ["llm-anthropic", "llm-openai"]
+
+# Convenience
+full = ["runtime", "store-memory", "sandbox-local", "llm-all"]
+
+[dependencies]
+lattice-core = { path = "crates/core" }
+lattice-runtime = { path = "crates/runtime", optional = true }
+lattice-store-memory = { path = "crates/store-memory", optional = true }
+lattice-sandbox-local = { path = "crates/sandbox-local", optional = true }
+lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
+lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
+lattice-llm-openai = { path = "crates/llm-openai", optional = true }
+
 [workspace]
 resolver = "2"
 members = [

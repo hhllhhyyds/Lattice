@@ -12,10 +12,10 @@ mod mock_llm;
 use std::sync::Arc;
 
 use anyhow::Result;
-use lattice_core::{Actor, EventFilter, EventPayload};
-use lattice_runtime::{BasicSandboxRouter, ControlLoop};
-use lattice_sandbox_local::LocalSandbox;
-use lattice_store_memory::MemoryStore;
+use lattice::core::{Actor, EventFilter, EventPayload};
+use lattice::runtime::{BasicSandboxRouter, ControlLoop};
+use lattice::sandbox_local::LocalSandbox;
+use lattice::store_memory::MemoryStore;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         .init();
 
     // ── 1. Assemble components ─────────────────────────────────────────────
-    let store: Arc<dyn lattice_core::SessionStore> = Arc::new(MemoryStore::new());
+    let store: Arc<dyn lattice::core::SessionStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
     let llm = Arc::new(mock_llm::MockLLMClient::hello_agent_sequence());
     let router = Arc::new(BasicSandboxRouter::new(sandbox, store.clone()));

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use lattice_core::{Decision, Event, LLMClient, LLMError, ToolDescription};
+use lattice::core::{Decision, Event, LLMClient, LLMError, ToolDescription};
 
 /// Mock LLM client that pops decisions from a queue in order.
 #[derive(Debug)]
