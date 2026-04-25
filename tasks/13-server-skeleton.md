@@ -1,7 +1,5 @@
 # 任务 13：Server crate 骨架 + 基础路由
 
-> ⚠️ **STATUS: DRAFT — 未经人工 review，内容可能调整。**
-
 ## 目标
 
 创建 `lattice-server` crate，搭建 axum HTTP 服务器骨架，实现健康检查端点和全局状态管理结构。Server 通过 feature flags 控制编译哪些 LLM provider。
