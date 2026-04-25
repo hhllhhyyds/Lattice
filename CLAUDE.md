@@ -20,6 +20,7 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | 技术选型及理由 |
 | [docs/MVP_SCOPE.md](docs/MVP_SCOPE.md) | MVP 范围定义：做什么、不做什么 |
 | [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) | AI 编程流程规范 |
+| [tasks/](tasks/) | MVP 任务拆解，按顺序执行 |
 
 ## Crate 结构
 
@@ -37,7 +38,8 @@ crates/
 - **异步运行时**：tokio
 - **命名**：snake_case（Rust 标准），trait 名用大驼峰
 - **错误处理**：trait 内部用 `thiserror` 定义具体错误类型，应用层可用 `anyhow`
-- **文档注释**：所有 pub 类型和方法必须有 `///` 文档注释
+- **文档注释**：所有 pub 类型和方法必须有 `///` 文档注释（英文）
+- **语言约定**：文档用中文，代码注释全部用英文（包括 `///` doc comment 和 `//` 行内注释）
 - **测试**：每个 crate 必须有单元测试，trait 实现必须有集成测试
 - **commit 信息**：`<type>(<scope>): <description>`，如 `feat(core): define SessionStore trait`
 
