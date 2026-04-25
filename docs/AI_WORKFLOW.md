@@ -171,11 +171,13 @@ Lattice/
 │   ├── store-memory/
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs
-│   └── sandbox-local/
-│       ├── Cargo.toml
-│       └── src/lib.rs
+│   ├── sandbox-local/
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs
+│   ├── llm-protocol/          # 通用 LLM 协议层
+│   ├── llm-anthropic/         # Anthropic Claude 后端
+│   └── llm-openai/            # OpenAI 兼容后端
 └── examples/
-    └── hello-agent/
-        ├── Cargo.toml
-        └── src/main.rs
+    ├── hello-agent/           # Mock LLM 端到端示例
+    └── real-agent/            # 真实 LLM 端到端示例
 ```

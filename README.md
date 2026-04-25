@@ -19,14 +19,32 @@ Lattice 是一个 Rust 编写的 Agent 元框架，灵感来自 [Anthropic Manag
 ## 快速开始
 
 ```bash
+# Mock LLM（无需 API key）
 cargo run --example hello-agent
+
+# 真实 LLM
+LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-ant-xxx \
+  LATTICE_MODEL=claude-sonnet-4-6 \
+  cargo run --example real-agent -- "What is 2+2?"
+
+# OpenAI 兼容（包括 MiniMax、vLLM、Ollama 等）
+LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=http://localhost:8000/v1 \
+  cargo run --example real-agent -- "List files"
 ```
+
+## LLM Provider 支持
+
+| Provider | 包 | 状态 |
+|----------|-----|------|
+| Anthropic Claude | `lattice-llm-anthropic` | ✅ |
+| OpenAI 兼容 | `lattice-llm-openai` | ✅ |
+| 自定义 base URL | via `LATTICE_API_BASE` | ✅ |
 
 ## 文档
 
 - [架构设计](docs/ARCHITECTURE.md)
 - [技术选型](docs/TECH_STACK.md)
-- [MVP 范围](docs/MVP_SCOPE.md)
+- [Roadmap](docs/ROADMAP.md)
 - [AI 编程流程](docs/AI_WORKFLOW.md)
 
 ## License

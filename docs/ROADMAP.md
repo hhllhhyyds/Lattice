@@ -4,28 +4,28 @@
 
 验证核心架构的三组件解耦可行性。
 
-| Crate | 内容 | 状态 |
-|-------|------|------|
-| lattice-core | 核心 trait + 类型定义（SessionStore、LLMClient、Sandbox、SandboxRouter） | ✅ |
-| lattice-runtime | ControlLoop 决策循环 + BasicSandboxRouter | ✅ |
-| lattice-store-memory | SessionStore 内存实现 | ✅ |
-| lattice-sandbox-local | Sandbox 本地子进程实现 | ✅ |
-| hello-agent example | 端到端验证（MockLLMClient） | ✅ |
-| GitHub Actions CI | fmt + clippy + test + doc | ✅ |
+| Crate                 | 内容                                                                     | 状态 |
+| --------------------- | ------------------------------------------------------------------------ | ---- |
+| lattice-core          | 核心 trait + 类型定义（SessionStore、LLMClient、Sandbox、SandboxRouter） | ✅    |
+| lattice-runtime       | ControlLoop 决策循环 + BasicSandboxRouter                                | ✅    |
+| lattice-store-memory  | SessionStore 内存实现                                                    | ✅    |
+| lattice-sandbox-local | Sandbox 本地子进程实现                                                   | ✅    |
+| hello-agent example   | 端到端验证（MockLLMClient）                                              | ✅    |
+| GitHub Actions CI     | fmt + clippy + test + doc                                                | ✅    |
 
 ## ✅ 第二轮：真实 LLM 接入（已完成）
 
-| Crate | 内容 | 状态 |
-|-------|------|------|
-| lattice-llm-protocol | 通用协议层（消息格式转换、响应解析） | ✅ |
-| lattice-llm-anthropic | Anthropic Claude 后端 | ✅ |
-| lattice-llm-openai | OpenAI 兼容后端 | ✅ |
+| Crate                 | 内容                                 | 状态 |
+| --------------------- | ------------------------------------ | ---- |
+| lattice-llm-protocol  | 通用协议层（消息格式转换、响应解析） | ✅    |
+| lattice-llm-anthropic | Anthropic Claude 后端                | ✅    |
+| lattice-llm-openai    | OpenAI 兼容后端                      | ✅    |
 
-## ✅ 当前：真实 LLM 验证（已完成）
+## ✅ 第三轮：真实 LLM 验证（已完成）
 
-| 任务 | 内容 | 状态 |
-|------|------|------|
-| real-agent example | 用真实 LLM（MiniMax-M2.7）端到端跑通 | ✅ |
+| 任务               | 内容                                        | 状态 |
+| ------------------ | ------------------------------------------- | ---- |
+| real-agent example | 用真实 LLM 端到端跑通（Anthropic / OpenAI） | ✅    |
 
 ## 📋 后续规划
 
