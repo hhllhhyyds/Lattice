@@ -62,7 +62,7 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 - `cargo test` — 单元测试和集成测试
 - `cargo clippy` — lint 检查
 - `cargo fmt --check` — 格式检查
-- 后期加入：`cargo doc` 文档生成检查
+- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` — 文档生成检查
 
 ### 阶段 5：AI Review（自动代码审查）
 
