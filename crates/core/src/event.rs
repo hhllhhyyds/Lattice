@@ -73,48 +73,4 @@ pub struct Event {
     pub parent_event_id: Option<EventId>,
 }
 
-/// Filter for querying events.
-#[derive(Debug, Clone, Default)]
-pub struct EventFilter {
-    /// Optional actor filter.
-    pub actor: Option<Actor>,
-    /// Optional payload type filter.
-    pub payload_type: Option<&'static str>,
-}
 
-/// LLM decision types.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum Decision {
-    /// LLM is thinking — continue loop.
-    Thinking { reasoning: String },
-    /// LLM wants to call a tool.
-    ToolCall {
-        tool: String,
-        params: serde_json::Value,
-    },
-    /// LLM is done.
-    FinalAnswer { answer: String },
-}
-
-/// Tool description injected to the LLM.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDescription {
-    /// Tool name.
-    pub name: String,
-    /// Human-readable description.
-    pub description: String,
-    /// JSON Schema for parameters.
-    pub parameters_schema: serde_json::Value,
-}
-
-/// Sandbox execution result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionResult {
-    /// Standard output.
-    pub stdout: String,
-    /// Standard error.
-    pub stderr: String,
-    /// Process exit code.
-    pub exit_code: i32,
-}
