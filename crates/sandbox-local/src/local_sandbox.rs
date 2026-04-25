@@ -47,7 +47,7 @@ impl Sandbox for LocalSandbox {
             .args(["-c", cmd_str])
             .output()
             .await
-            .map_err(|e| lattice_core::SandboxError(e.to_string()))?;
+            .map_err(|e| lattice_core::SandboxError::ExecutionFailed(e.to_string()))?;
 
         Ok(ExecutionResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),

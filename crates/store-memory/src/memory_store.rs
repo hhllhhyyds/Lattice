@@ -66,7 +66,7 @@ impl SessionStore for MemoryStore {
         let mut sessions = self.sessions.write().await;
         let events = sessions
             .get_mut(&session_id)
-            .ok_or_else(|| StoreError(format!("session {session_id} not found")))?;
+            .ok_or(StoreError::SessionNotFound(session_id))?;
         events.push(event);
         Ok(event_id)
     }
@@ -79,7 +79,7 @@ impl SessionStore for MemoryStore {
         let sessions = self.sessions.read().await;
         let events = sessions
             .get(&session_id)
-            .ok_or_else(|| StoreError(format!("session {session_id} not found")))?;
+            .ok_or(StoreError::SessionNotFound(session_id))?;
 
         let mut result: Vec<Event> = events.clone();
 
@@ -94,7 +94,7 @@ impl SessionStore for MemoryStore {
         let sessions = self.sessions.read().await;
         let events = sessions
             .get(&session_id)
-            .ok_or_else(|| StoreError(format!("session {session_id} not found")))?;
+            .ok_or(StoreError::SessionNotFound(session_id))?;
         Ok(events.last().map(|e| e.event_id))
     }
 }

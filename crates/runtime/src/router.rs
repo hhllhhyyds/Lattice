@@ -34,6 +34,6 @@ impl SandboxRouter for BasicSandboxRouter {
         self.sandbox
             .execute(tool, params)
             .await
-            .map_err(|e| lattice_core::RouterError(e.to_string()))
+            .map_err(|e| lattice_core::RouterError::ExecutionFailed(e.to_string()))
     }
 }
