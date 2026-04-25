@@ -1,27 +1,45 @@
-//! Mock LLM client for hello-agent example.
+//! Mock LLM client that returns hardcoded decisions in sequence.
+//!
+//! Built on `Mutex<VecDeque<Decision>>` so decisions are consumed in order
+//! and the queue is transparent for inspection.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use lattice_core::{Decision, Event, LLMClient, LLMError, ToolDescription};
 
-/// Mock LLM client that cycles through a hardcoded decision sequence.
+/// Mock LLM client that pops decisions from a queue in order.
+#[derive(Debug)]
 pub struct MockLLMClient {
-    step: AtomicUsize,
+    decisions: Mutex<VecDeque<Decision>>,
 }
 
 impl MockLLMClient {
+    /// Create a new MockLLMClient with the given decision sequence.
+    ///
+    /// Decisions are consumed in order on each call to `decide()`.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(decisions: Vec<Decision>) -> Self {
         Self {
-            step: AtomicUsize::new(0),
+            decisions: Mutex::new(decisions.into()),
         }
     }
-}
 
-impl Default for MockLLMClient {
-    fn default() -> Self {
-        Self::new()
+    /// Create the standard hello-agent decision sequence:
+    /// 1. ToolCall to bash
+    /// 2. FinalAnswer
+    #[must_use]
+    pub fn hello_agent_sequence() -> Self {
+        Self::new(vec![
+            Decision::ToolCall {
+                tool: "bash".to_string(),
+                params: serde_json::json!({ "command": "echo Hello from Lattice!" }),
+            },
+            Decision::FinalAnswer {
+                answer: "命令执行成功，输出: Hello from Lattice!".to_string(),
+            },
+        ])
     }
 }
 
@@ -33,18 +51,9 @@ impl LLMClient for MockLLMClient {
         _available_tools: &[ToolDescription],
         _system_prompt: &str,
     ) -> Result<Decision, LLMError> {
-        let step = self.step.fetch_add(1, Ordering::SeqCst);
-        match step {
-            0 => Ok(Decision::ToolCall {
-                tool: "bash".to_string(),
-                params: serde_json::json!({ "command": "echo 'hello from sandbox'" }),
-            }),
-            1 => Ok(Decision::FinalAnswer {
-                answer: "Hello back from the agent!".to_string(),
-            }),
-            _ => Ok(Decision::FinalAnswer {
-                answer: "done".to_string(),
-            }),
-        }
+        let mut queue = self.decisions.lock().unwrap();
+        queue.pop_front().ok_or_else(|| {
+            LLMError::InvalidResponse("mock LLM: decision queue exhausted".to_string())
+        })
     }
 }
