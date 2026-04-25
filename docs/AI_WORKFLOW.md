@@ -64,15 +64,50 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 - `cargo fmt --check` — 格式检查
 - 后期加入：`cargo doc` 文档生成检查
 
-### 阶段 5：Review（代码审查）
+### 阶段 5：AI Review（自动代码审查）
 
-**由人 + AI 共同完成**。
+**由 Claude Code 完成**，在人工 review 之前执行。
 
-- 创建 PR，描述做了什么、为什么这么做
-- 可以让 Claude Code 做 code review：`读取这个 PR 的改动，对照 docs/ARCHITECTURE.md 检查是否符合架构设计`
-- 人做最终判断
+每个 feature 分支完成后，在 Claude Code 中执行以下 review 指令：
 
-### 阶段 6：Merge & Deploy
+```
+读取 CLAUDE.md 了解项目上下文。
+
+Review 当前分支相对于 main 的所有改动（git diff main...HEAD）。
+
+检查以下维度：
+1. 架构合规 — 是否符合 docs/ARCHITECTURE.md 的 trait 定义和设计原则
+2. 代码质量 — 错误处理、命名、代码组织
+3. 测试覆盖 — 是否覆盖了 tasks/ 中要求的测试场景
+4. 文档注释 — pub 类型和方法是否有英文 doc comment
+5. 安全边界 — ControlLoop 是否直接依赖了具体实现
+6. 语言规范 — 代码注释是否全部使用英文
+
+输出格式：
+- ✅ 通过的项
+- ⚠️ 建议改进的项（非阻塞）
+- ❌ 必须修改的项（阻塞合并）
+
+如果有 ❌ 项，直接修复后重新提交。
+如果只有 ⚠️ 项，列出建议，交由人工判断是否修改。
+```
+
+**流程**：
+1. Claude Code 完成实现 → 自己跑 review 指令
+2. 有 ❌ 项 → 自行修复 → 重新 review → 直到无 ❌
+3. 输出 review 报告
+4. 交给人工做最终审查
+
+### 阶段 6：人工 Review（最终审查）
+
+**由人完成**，是合并前的最后一道关。
+
+- 查看 AI Review 报告
+- 浏览代码改动，关注设计判断和架构方向
+- 通过 → 进入 Merge
+- 不通过 → 反馈给 Claude Code 修改
+
+### 阶段 7：Merge & Deploy
 
 - Squash merge 到 main
 - 后期：GitHub Actions 自动运行测试 + 发布
