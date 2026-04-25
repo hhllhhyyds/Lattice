@@ -1,0 +1,39 @@
+[package]
+name = "lattice-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["anthropic", "openai"]
+
+# LLM provider features — compile-time control over which backends are enabled
+anthropic = ["lattice-llm-anthropic", "lattice-llm-protocol"]
+openai = ["lattice-llm-openai", "lattice-llm-protocol"]
+
+[dependencies]
+lattice-core = { path = "../core" }
+lattice-runtime = { path = "../runtime" }
+lattice-store-memory = { path = "../store-memory" }
+lattice-sandbox-local = { path = "../sandbox-local" }
+lattice-llm-protocol = { path = "../llm-protocol", optional = true }
+lattice-llm-anthropic = { path = "../llm-anthropic", optional = true }
+lattice-llm-openai = { path = "../llm-openai", optional = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+hyper = { workspace = true }
+tower = { workspace = true }
+http-body-util = "0.1"

@@ -50,6 +50,7 @@ members = [
     "crates/llm-protocol",
     "crates/llm-anthropic",
     "crates/llm-openai",
+    "crates/server",
     "examples/hello-agent",
     "examples/real-agent",
 ]
@@ -73,3 +74,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 mockall = "0.13"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = "1"
+http-body-util = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
