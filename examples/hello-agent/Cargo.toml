@@ -1,0 +1,20 @@
+[package]
+name = "hello-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lattice-core = { path = "../../crates/core" }
+lattice-runtime = { path = "../../crates/runtime" }
+lattice-store-memory = { path = "../../crates/store-memory" }
+lattice-sandbox-local = { path = "../../crates/sandbox-local" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
