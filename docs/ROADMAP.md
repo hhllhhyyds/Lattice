@@ -42,8 +42,8 @@
 
 | #  | 任务 | 分支名 | 状态 |
 |----|------|--------|------|
-| 12 | [Facade crate + Feature Flags](../tasks/12-facade-features.md) | `feat/facade-features` | ⬜ |
-| 13 | [Server crate 骨架 + 基础路由](../tasks/13-server-skeleton.md) | `feat/server-skeleton` | ⬜ |
+| 12 | [Facade crate + Feature Flags](../tasks/12-facade-features.md) | `feat/facade-features` | ✅ |
+| 13 | [Server crate 骨架 + 基础路由](../tasks/13-server-skeleton.md) | `feat/server-skeleton` | ✅ |
 | 14 | [会话管理 API](../tasks/14-session-api.md) | `feat/session-api` | ⬜ |
 | 15 | [任务提交与 Agent 执行 API](../tasks/15-agent-run-api.md) | `feat/agent-run-api` | ⬜ |
 | 16 | [SSE 实时事件流](../tasks/16-sse-stream.md) | `feat/sse-stream` | ⬜ |

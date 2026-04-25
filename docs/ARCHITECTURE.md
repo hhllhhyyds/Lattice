@@ -327,8 +327,9 @@ sandbox-local = ["dep:lattice-sandbox-local"]
 # sandbox-docker = ["dep:lattice-sandbox-docker"] # 未来
 
 # LLM 后端
-llm-anthropic = ["dep:lattice-llm-anthropic", "dep:lattice-llm-protocol"]
-llm-openai = ["dep:lattice-llm-openai", "dep:lattice-llm-protocol"]
+llm-protocol = ["dep:lattice-llm-protocol"]
+llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
+llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
 llm-all = ["llm-anthropic", "llm-openai"]
 
 # 便利组合
@@ -343,6 +344,8 @@ lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
 lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
 lattice-llm-openai = { path = "crates/llm-openai", optional = true }
 ```
+
+`crates/server` 是独立的 `lattice-server` crate，有自己的 feature flags（default=[anthropic, openai]），受 workspace 管理。
 
 ### 消费者使用示例
 
