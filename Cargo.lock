@@ -970,6 +970,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "real-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lattice-core",
+ "lattice-llm-anthropic",
+ "lattice-llm-openai",
+ "lattice-runtime",
+ "lattice-sandbox-local",
+ "lattice-store-memory",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
