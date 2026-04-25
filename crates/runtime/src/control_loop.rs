@@ -16,7 +16,7 @@ const DEFAULT_MAX_ITERATIONS: usize = 50;
 /// Loads event history, calls the LLM for decisions, routes tool calls,
 /// and records results. All state is recovered from the SessionStore.
 ///
-/// The loop terminates on `FinalAnswer` or when [`max_iterations`] is reached.
+/// The loop terminates on `FinalAnswer` or when `max_iterations` is reached.
 pub struct ControlLoop {
     store: Arc<dyn SessionStore>,
     llm: Arc<dyn LLMClient>,
