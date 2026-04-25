@@ -30,6 +30,9 @@ crates/
 ├── runtime/        # ControlLoop 实现
 ├── store-memory/   # SessionStore 内存实现（开发/测试用）
 ├── sandbox-local/  # Sandbox 本地子进程实现
+├── llm-protocol/   # LLM 通用协议层（消息格式转换、响应解析）
+├── llm-anthropic/  # LLMClient 的 Anthropic Claude 实现
+├── llm-openai/     # LLMClient 的 OpenAI 兼容实现
 ```
 
 ## 代码规范
