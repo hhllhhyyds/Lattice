@@ -5,6 +5,7 @@ members = [
     "crates/runtime",
     "crates/store-memory",
     "crates/sandbox-local",
+    "crates/llm-protocol",
     "examples/hello-agent",
 ]
 
