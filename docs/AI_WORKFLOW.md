@@ -98,7 +98,38 @@ Review 当前分支相对于 main 的所有改动（git diff main...HEAD）。
 3. 输出 review 报告
 4. 交给人工做最终审查
 
-### 阶段 6：人工 Review（最终审查）
+### 阶段 6：更新 DOCS（文档同步）
+
+**由 Claude Code 完成**，在 AI Review 通过后、人工 Review 之前执行。
+
+代码改完了不算完——文档必须跟着代码走。每次任务完成后，检查并更新以下文档：
+
+1. **CLAUDE.md**：如果新增了 crate、修改了 crate 结构、改变了核心原则，更新对应段落
+2. **docs/ARCHITECTURE.md**：如果引入了新的 trait、数据结构、组件交互方式，更新架构描述
+3. **docs/TECH_STACK.md**：如果引入了新的依赖（如 axum、tower-http、toml），添加选型理由
+4. **docs/ROADMAP.md**：将当前任务状态从 ⬜ 更新为 ✅
+5. **tasks/README.md**：同步任务状态
+6. **tasks/<当前任务>.md**：勾选验收标准中已完成的项
+7. **目录结构约定**（本文档最后一节）：如果文件结构有变化，保持一致
+
+**原则**：
+- 文档即真相——如果文档和代码不一致，后来的人（包括 AI）会被误导
+- 先改完文档，再提交代码。不要留"回头补文档"的债
+- 不确定该不该改的文档，宁可多改一行，也别漏掉
+
+**给 Claude Code 的文档更新指令**（可附加在实现指令末尾）：
+
+```
+实现完成后，检查并更新以下文档（如有变化）：
+- CLAUDE.md（crate 结构、核心原则）
+- docs/ARCHITECTURE.md（新 trait/组件/数据流）
+- docs/TECH_STACK.md（新依赖及选型理由）
+- docs/ROADMAP.md（任务状态 ⬜ → ✅）
+- tasks/README.md（任务状态同步）
+- tasks/<当前任务>.md（验收标准打勾）
+```
+
+### 阶段 7：人工 Review（最终审查）
 
 **由人完成**，是合并前的最后一道关。
 
@@ -107,7 +138,7 @@ Review 当前分支相对于 main 的所有改动（git diff main...HEAD）。
 - 通过 → 进入 Merge
 - 不通过 → 反馈给 Claude Code 修改
 
-### 阶段 7：Merge & Deploy
+### 阶段 8：Merge & Deploy
 
 - Squash merge 到 main
 - 后期：GitHub Actions 自动运行测试 + 发布
@@ -176,7 +207,8 @@ Lattice/
 │   │   └── src/lib.rs
 │   ├── llm-protocol/          # 通用 LLM 协议层
 │   ├── llm-anthropic/         # Anthropic Claude 后端
-│   └── llm-openai/            # OpenAI 兼容后端
+│   ├── llm-openai/            # OpenAI 兼容后端
+│   └── server/                # HTTP API 服务（axum）
 └── examples/
     ├── hello-agent/           # Mock LLM 端到端示例
     └── real-agent/            # 真实 LLM 端到端示例

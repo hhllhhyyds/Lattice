@@ -32,6 +32,13 @@ LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=http://localhost:8000/v1 \
   cargo run --example real-agent -- "List files"
 ```
 
+## HTTP API Server
+
+```bash
+cargo run -p lattice-server
+curl http://localhost:3000/health
+```
+
 ## LLM Provider 支持
 
 | Provider | 包 | 状态 |
