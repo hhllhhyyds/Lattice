@@ -1,0 +1,20 @@
+[package]
+name = "real-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lattice-core = { path = "../../crates/core" }
+lattice-runtime = { path = "../../crates/runtime" }
+lattice-store-memory = { path = "../../crates/store-memory" }
+lattice-sandbox-local = { path = "../../crates/sandbox-local" }
+lattice-llm-anthropic = { path = "../../crates/llm-anthropic" }
+lattice-llm-openai = { path = "../../crates/llm-openai" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }

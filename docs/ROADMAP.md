@@ -21,11 +21,11 @@
 | lattice-llm-anthropic | Anthropic Claude 后端 | ✅ |
 | lattice-llm-openai | OpenAI 兼容后端 | ✅ |
 
-## 🔄 当前：真实 LLM 验证
+## ✅ 当前：真实 LLM 验证（已完成）
 
 | 任务 | 内容 | 状态 |
 |------|------|------|
-| real-agent example | 用真实 LLM 端到端跑通，验证 Anthropic 和 OpenAI 后端 | ⬜ |
+| real-agent example | 用真实 LLM（MiniMax-M2.7）端到端跑通 | ✅ |
 
 ## 📋 后续规划
 

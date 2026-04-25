@@ -9,6 +9,7 @@ members = [
     "crates/llm-anthropic",
     "crates/llm-openai",
     "examples/hello-agent",
+    "examples/real-agent",
 ]
 
 [workspace.package]
