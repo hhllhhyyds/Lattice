@@ -4,8 +4,8 @@
 //! and the various LLM provider APIs. It provides:
 //!
 //! - A universal message format ([`Message`], [`ContentBlock`], [`Role`])
-//! - Conversion from Lattice [`Event`]s to LLM messages ([`convert`])
-//! - Parsing of LLM responses into [`Decision`]s ([`parse`])
+//! - Conversion from Lattice [`lattice_core::Event`]s to LLM messages ([`convert`])
+//! - Parsing of LLM responses into [`lattice_core::Decision`]s ([`parse`])
 //! - Provider-agnostic request/response types ([`LLMRequest`], [`LLMResponse`])
 
 pub mod convert;

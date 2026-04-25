@@ -1,6 +1,6 @@
 //! Lattice LLM backend for Anthropic Claude.
 //!
-//! Implements [`LLMClient`] using the Anthropic Messages API.
+//! Implements [`lattice_core::LLMClient`] using the Anthropic Messages API.
 
 mod client;
 mod types;
