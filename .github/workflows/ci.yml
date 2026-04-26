@@ -49,3 +49,25 @@ jobs:
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Coverage
+        uses: cargo-llvm-cov/cargo-llvm-cov-action@v0.2
+        with:
+          version: latest
+          lcov: true
+          output-file: lcov.info
+          cargo-llvm-cov-args: --all-features

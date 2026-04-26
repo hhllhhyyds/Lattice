@@ -16,6 +16,13 @@ echo ""
 echo "=== 3/4 Tests ==="
 cargo test --workspace --all-targets --all-features
 
+if command -v cargo-llvm-cov &> /dev/null; then
+    echo ""
+    echo "=== 3.5/4 Coverage ==="
+    cargo llvm-cov test --workspace --all-features -- --nocapture
+    cargo llvm-cov report --lcov
+fi
+
 echo ""
 echo "=== 4/4 Doc check ==="
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features

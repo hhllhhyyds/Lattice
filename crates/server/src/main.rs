@@ -83,3 +83,38 @@ impl Colored for str {
         format!("\x1b[1;32m{self}\x1b[0m")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enabled_features_summary() {
+        let summary = enabled_features_summary();
+        // Should contain "anthropic" or "-anthropic" and "openai" or "-openai"
+        assert!(summary.contains("anthropic"));
+        assert!(summary.contains("openai"));
+    }
+
+    #[test]
+    fn test_bright_green() {
+        let colored = "ready".bright_green();
+        assert!(colored.contains("ready"));
+        assert!(colored.contains("\x1b[1;32m"));
+        assert!(colored.contains("\x1b[0m"));
+    }
+
+    #[test]
+    fn test_bright_green_empty_string() {
+        let colored = "".bright_green();
+        assert_eq!(colored, "\x1b[1;32m\x1b[0m");
+    }
+
+    #[test]
+    fn test_enabled_features_summary_contains_both() {
+        let summary = enabled_features_summary();
+        // Format: "{anthropic}, {openai}" where each is "name" or "-name"
+        let parts: Vec<&str> = summary.split(", ").collect();
+        assert_eq!(parts.len(), 2);
+    }
+}

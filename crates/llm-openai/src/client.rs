@@ -386,6 +386,160 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_text() {
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "hello".into(),
+            },
+            ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "bash".into(),
+                input: serde_json::json!({}),
+            },
+            ContentBlock::Text {
+                text: "world".into(),
+            },
+        ];
+        let result = extract_text(&blocks);
+        assert_eq!(result, "hello\nworld");
+    }
+
+    #[test]
+    fn test_extract_text_empty() {
+        let blocks = vec![ContentBlock::ToolUse {
+            id: "t1".into(),
+            name: "bash".into(),
+            input: serde_json::json!({}),
+        }];
+        let result = extract_text(&blocks);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_to_openai_messages_assistant_with_tool_calls() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        // Assistant message with both text and tool calls
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Text {
+                    text: "Let me run that.".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ],
+        }];
+        let result = client.to_openai_messages(&messages, "");
+        // Should produce one message with both text and tool_calls
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "assistant");
+        assert!(result[0].content.is_some());
+        assert!(result[0].tool_calls.is_some());
+        assert_eq!(result[0].tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_to_openai_messages_role_tool() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_1".into(),
+                content: "output".into(),
+                is_error: false,
+            }],
+        }];
+        let result = client.to_openai_messages(&messages, "");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "tool");
+        assert_eq!(result[0].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(result[0].content.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn test_to_openai_messages_role_tool_with_error() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_2".into(),
+                content: "error".into(),
+                is_error: true,
+            }],
+        }];
+        let result = client.to_openai_messages(&messages, "");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "tool");
+        assert_eq!(result[0].tool_call_id.as_deref(), Some("call_2"));
+    }
+
+    #[test]
+    fn test_to_openai_messages_role_system() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        // Role::System should be skipped (system prompt handled separately)
+        let messages = vec![Message::text(Role::System, "ignored")];
+        let result = client.to_openai_messages(&messages, "");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_response_with_text_and_tool_calls() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: Some("Done".into()),
+                    tool_calls: Some(vec![OpenAIToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: OpenAIFunctionCall {
+                            name: "bash".into(),
+                            arguments: r#"{"cmd":"ls"}"#.into(),
+                        },
+                    }]),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+        // Tool calls take priority over text
+        let result = client.parse_response(response).unwrap();
+        match result {
+            LLMResponse::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "bash");
+                assert_eq!(input, serde_json::json!({"cmd": "ls"}));
+            }
+            _ => panic!("expected ToolUse"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_text_only() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: Some("Hello".into()),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: None,
+        };
+        let result = client.parse_response(response).unwrap();
+        match result {
+            LLMResponse::Text { text } => assert_eq!(text, "Hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
     fn test_to_openai_messages_with_system() {
         let client = OpenAIClient::new("test-key", "gpt-4o");
         let messages = vec![Message::text(Role::User, "hi")];

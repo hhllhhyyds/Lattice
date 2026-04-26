@@ -526,4 +526,125 @@ mod tests {
         let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(evts["events"].as_array().unwrap().is_empty());
     }
+
+    #[tokio::test]
+    async fn get_events_with_event_type_filter() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Filter by eventType=sessionCreated
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/events?eventType=sessionCreated"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(evts["events"].as_array().unwrap().len(), 1);
+        assert_eq!(evts["events"][0]["payload"]["type"], "sessionCreated");
+
+        // Filter by eventType=thinking (should return 0)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/events?eventType=thinking"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(evts["events"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_events_with_cursor_pagination() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Query events to get the first event ID for cursor testing.
+        let events_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}/events"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(events_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let first_event_id = evts["events"][0]["eventId"].as_str().unwrap();
+
+        // Get events after the first event (should be empty since there's only one event).
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/events?after={first_event_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(evts["events"].as_array().unwrap().is_empty());
+        assert!(!evts["hasMore"].as_bool().unwrap());
+    }
 }
