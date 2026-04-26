@@ -602,8 +602,9 @@ let control_loop = ControlLoop::new(store, llm, tools);
 
 使用 `cargo-llvm-cov` 检测代码覆盖率。覆盖率指标按 crate 维度统计（line coverage、branch coverage），作为 CI 的一部分运行，不阻断合并。
 
-- **工具**：`cargo-llvm-cov`
-- **报告格式**：LCOV（`--lcov`），CI 上传至覆盖率跟踪服务
+- **工具**：`cargo-llvm-cov` + `cargo-llvm-cov-action`
+- **CI 上传**：通过 Codecov action 上传至 codecov.io
+- **报告格式**：LCOV（`--lcov`），生成 lcov.info
 - **原则**：新增代码应附带测试，保持覆盖率不下降
 
 ## Crate 结构

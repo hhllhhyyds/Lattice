@@ -71,3 +71,4 @@ jobs:
           lcov: true
           output-file: lcov.info
           cargo-llvm-cov-args: --all-features
+          token: ${{ secrets.CODECOV_TOKEN }}
