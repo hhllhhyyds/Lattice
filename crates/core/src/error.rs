@@ -54,17 +54,23 @@ pub enum SandboxError {
     Other(String),
 }
 
-/// Error from the sandbox router.
+/// Error from a tool executor.
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
-pub enum RouterError {
-    /// No suitable sandbox is available for the requested tool.
-    #[error("no sandbox available for tool '{tool}': {reason}")]
-    NoSandbox { tool: String, reason: String },
-    /// Sandbox execution via the router failed.
+pub enum ToolError {
+    /// Tool not found in the registry.
+    #[error("tool not found: {0}")]
+    NotFound(String),
+    /// Invalid parameters provided to the tool.
+    #[error("invalid parameters: {0}")]
+    InvalidParams(String),
+    /// Tool execution failed.
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
-    /// Generic router error.
-    #[error("router error: {0}")]
+    /// Execution timed out.
+    #[error("timeout after {timeout_secs}s")]
+    Timeout { timeout_secs: u64 },
+    /// Generic tool error.
+    #[error("tool error: {0}")]
     Other(String),
 }

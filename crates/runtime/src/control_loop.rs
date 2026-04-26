@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use lattice_core::{
-    Actor, Decision, EventFilter, EventPayload, LLMClient, SandboxRouter, SessionId, SessionStore,
-    ToolDescription,
+    Actor, Decision, EventFilter, EventPayload, LLMClient, SessionId, SessionStore,
 };
 use tracing::{info, instrument, warn};
+
+use lattice_tools::ToolSet;
 
 /// The maximum number of decision cycles before forcing exit.
 const DEFAULT_MAX_ITERATIONS: usize = 50;
@@ -20,8 +21,7 @@ const DEFAULT_MAX_ITERATIONS: usize = 50;
 pub struct ControlLoop {
     store: Arc<dyn SessionStore>,
     llm: Arc<dyn LLMClient>,
-    router: Arc<dyn SandboxRouter>,
-    available_tools: Vec<ToolDescription>,
+    tools: Arc<ToolSet>,
     system_prompt: String,
     max_iterations: usize,
 }
@@ -29,19 +29,14 @@ pub struct ControlLoop {
 impl ControlLoop {
     /// Create a new control loop with the minimum required components.
     ///
-    /// Uses defaults: empty tools, `"You are a helpful agent."` prompt,
+    /// Uses defaults: empty tool set, `"You are a helpful agent."` prompt,
     /// and 50 max iterations.
     #[must_use]
-    pub fn new(
-        store: Arc<dyn SessionStore>,
-        llm: Arc<dyn LLMClient>,
-        router: Arc<dyn SandboxRouter>,
-    ) -> Self {
+    pub fn new(store: Arc<dyn SessionStore>, llm: Arc<dyn LLMClient>, tools: Arc<ToolSet>) -> Self {
         Self {
             store,
             llm,
-            router,
-            available_tools: Vec::new(),
+            tools,
             system_prompt: "You are a helpful agent.".to_string(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
         }
@@ -52,16 +47,14 @@ impl ControlLoop {
     pub fn with_options(
         store: Arc<dyn SessionStore>,
         llm: Arc<dyn LLMClient>,
-        router: Arc<dyn SandboxRouter>,
-        available_tools: Vec<ToolDescription>,
+        tools: Arc<ToolSet>,
         system_prompt: String,
         max_iterations: usize,
     ) -> Self {
         Self {
             store,
             llm,
-            router,
-            available_tools,
+            tools,
             system_prompt,
             max_iterations,
         }
@@ -70,6 +63,11 @@ impl ControlLoop {
     /// Get a reference to the session store.
     pub fn store(&self) -> &Arc<dyn SessionStore> {
         &self.store
+    }
+
+    /// Get a reference to the tool set.
+    pub fn tools(&self) -> &Arc<ToolSet> {
+        &self.tools
     }
 
     /// Run the control loop for a session.
@@ -86,9 +84,10 @@ impl ControlLoop {
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+            let available_tools = self.tools.descriptions();
             let decision = self
                 .llm
-                .decide(&events, &self.available_tools, &self.system_prompt)
+                .decide(&events, &available_tools, &self.system_prompt)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -122,24 +121,36 @@ impl ControlLoop {
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-                    // Router executes and records ToolCallResult on success.
-                    // On failure, we record ToolCallError here.
-                    if let Err(e) = self
-                        .router
-                        .route(session_id, req_event_id, &tool, params)
-                        .await
-                    {
-                        self.store
-                            .append_event(
-                                session_id,
-                                EventPayload::ToolCallError {
-                                    error: e.to_string(),
-                                },
-                                Actor::Sandbox,
-                                Some(req_event_id),
-                            )
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    // Execute the tool and record the result (or error) directly.
+                    match self.tools.execute(&tool, params).await {
+                        Ok(result) => {
+                            self.store
+                                .append_event(
+                                    session_id,
+                                    EventPayload::ToolCallResult {
+                                        stdout: result.stdout,
+                                        stderr: result.stderr,
+                                        exit_code: result.exit_code,
+                                    },
+                                    Actor::Sandbox,
+                                    Some(req_event_id),
+                                )
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                        }
+                        Err(e) => {
+                            self.store
+                                .append_event(
+                                    session_id,
+                                    EventPayload::ToolCallError {
+                                        error: e.to_string(),
+                                    },
+                                    Actor::Sandbox,
+                                    Some(req_event_id),
+                                )
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                        }
                     }
                 }
                 Decision::FinalAnswer { answer } => {
@@ -181,8 +192,11 @@ mod tests {
     use async_trait::async_trait;
     use lattice_core::{
         Actor, Decision, Event, EventFilter, EventPayload, ExecutionResult, LLMClient, LLMError,
-        RouterError, SandboxRouter, SessionId, ToolDescription,
+        SessionId, ToolDescription,
     };
+
+    use lattice_core::ToolError;
+    use lattice_tools::{ToolExecutor, ToolSet};
 
     /// Manual test double for SessionStore.
     struct TestStore {
@@ -291,35 +305,37 @@ mod tests {
         }
     }
 
-    /// Manual test double for SandboxRouter.
-    struct TestRouter {
-        result: Result<ExecutionResult, RouterError>,
-    }
-
-    impl TestRouter {
-        fn new(result: Result<ExecutionResult, RouterError>) -> Self {
-            Self { result }
-        }
-    }
+    /// No-op tool for testing.
+    struct NoopTool;
 
     #[async_trait]
-    impl SandboxRouter for TestRouter {
-        async fn route(
-            &self,
-            _session_id: SessionId,
-            _parent_event_id: lattice_core::EventId,
-            _tool: &str,
-            _params: serde_json::Value,
-        ) -> Result<ExecutionResult, RouterError> {
-            self.result.clone()
+    impl ToolExecutor for NoopTool {
+        fn description(&self) -> ToolDescription {
+            ToolDescription {
+                name: "noop".to_string(),
+                description: "A no-op tool for testing.".to_string(),
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            }
+        }
+
+        async fn execute(&self, _params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+            Ok(ExecutionResult {
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
         }
     }
 
-    #[tokio::test]
-    async fn test_normal_flow_toolcall_then_final() {
-        let session_id = SessionId::new_v4();
+    fn make_tools() -> Arc<ToolSet> {
+        Arc::new(ToolSet::new())
+    }
 
-        let store = Arc::new(TestStore::new());
+    fn insert_test_session(store: &TestStore, session_id: SessionId) {
         store.insert_session(
             session_id,
             vec![Event {
@@ -331,17 +347,20 @@ mod tests {
                 parent_event_id: None,
             }],
         );
+    }
+
+    #[tokio::test]
+    async fn test_normal_flow_final_answer() {
+        let session_id = SessionId::new_v4();
+        let store = Arc::new(TestStore::new());
+        insert_test_session(&store, session_id);
 
         let llm = Arc::new(TestLLM::new(Decision::FinalAnswer {
             answer: "done".to_string(),
         }));
-        let router = Arc::new(TestRouter::new(Ok(ExecutionResult {
-            stdout: "hello".to_string(),
-            stderr: String::new(),
-            exit_code: 0,
-        })));
+        let tools = make_tools();
 
-        let control_loop = crate::ControlLoop::new(store, llm, router);
+        let control_loop = crate::ControlLoop::new(store, llm, tools);
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "done");
     }
@@ -349,92 +368,81 @@ mod tests {
     #[tokio::test]
     async fn test_thinking_flow() {
         let session_id = SessionId::new_v4();
-
         let store = Arc::new(TestStore::new());
-        store.insert_session(
-            session_id,
-            vec![Event {
-                event_id: lattice_core::EventId::new_v4(),
-                session_id,
-                timestamp: chrono::Utc::now(),
-                actor: Actor::System,
-                payload: EventPayload::SessionCreated,
-                parent_event_id: None,
-            }],
-        );
+        insert_test_session(&store, session_id);
 
         let llm = Arc::new(TestLLM::new(Decision::FinalAnswer {
             answer: "answer".to_string(),
         }));
-        let router = Arc::new(TestRouter::new(Ok(ExecutionResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        })));
+        let tools = make_tools();
 
-        let control_loop = crate::ControlLoop::new(store, llm, router);
+        let control_loop = crate::ControlLoop::new(store, llm, tools);
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "answer");
     }
 
     #[tokio::test]
-    async fn test_tool_call_failure_continues() {
+    async fn test_tool_call_continues_after_result() {
         let session_id = SessionId::new_v4();
-
         let store = Arc::new(TestStore::new());
-        store.insert_session(
-            session_id,
-            vec![Event {
-                event_id: lattice_core::EventId::new_v4(),
-                session_id,
-                timestamp: chrono::Utc::now(),
-                actor: Actor::System,
-                payload: EventPayload::SessionCreated,
-                parent_event_id: None,
-            }],
-        );
+        insert_test_session(&store, session_id);
 
-        let llm = Arc::new(TestLLM::new(Decision::FinalAnswer {
-            answer: "recovered".to_string(),
-        }));
-        let router = Arc::new(TestRouter::new(Err(RouterError::ExecutionFailed(
-            "boom".to_string(),
-        ))));
+        // Return ToolCall first, then FinalAnswer.
+        struct TwoStepLLM(Arc<Mutex<bool>>);
+        impl TwoStepLLM {
+            fn new() -> Self {
+                Self(Arc::new(Mutex::new(false)))
+            }
+        }
+        #[async_trait]
+        impl LLMClient for TwoStepLLM {
+            async fn decide(
+                &self,
+                _history: &[Event],
+                _available_tools: &[ToolDescription],
+                _system_prompt: &str,
+            ) -> Result<Decision, LLMError> {
+                let mut called = self.0.lock().unwrap();
+                if !*called {
+                    *called = true;
+                    Ok(Decision::ToolCall {
+                        tool: "noop".to_string(),
+                        params: serde_json::json!({}),
+                    })
+                } else {
+                    Ok(Decision::FinalAnswer {
+                        answer: "after tool".to_string(),
+                    })
+                }
+            }
+        }
 
-        let control_loop = crate::ControlLoop::new(store, llm, router);
+        let llm = Arc::new(TwoStepLLM::new());
+        let tools = {
+            let mut ts = ToolSet::new();
+            ts.register(NoopTool).unwrap();
+            Arc::new(ts)
+        };
+
+        let control_loop = crate::ControlLoop::new(store, llm, tools);
         let result = control_loop.run(session_id).await.unwrap();
-        assert_eq!(result, "recovered");
+        assert_eq!(result, "after tool");
     }
 
     #[tokio::test]
     async fn test_max_iterations_protection() {
         let session_id = SessionId::new_v4();
-
         let store = Arc::new(TestStore::new());
-        store.insert_session(
-            session_id,
-            vec![Event {
-                event_id: lattice_core::EventId::new_v4(),
-                session_id,
-                timestamp: chrono::Utc::now(),
-                actor: Actor::System,
-                payload: EventPayload::SessionCreated,
-                parent_event_id: None,
-            }],
-        );
+        insert_test_session(&store, session_id);
 
         // LLM always returns Thinking — loop will hit max iterations.
         let llm = Arc::new(TestLLM::new(Decision::Thinking {
             reasoning: "loop".to_string(),
         }));
-        let router = Arc::new(TestRouter::new(Ok(ExecutionResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        })));
+        let tools = make_tools();
 
         let control_loop =
-            crate::ControlLoop::with_options(store, llm, router, vec![], "prompt".to_string(), 3);
+            crate::ControlLoop::with_options(store, llm, tools, "prompt".to_string(), 3);
 
         let result = control_loop.run(session_id).await;
         assert!(result.is_err());

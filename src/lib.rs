@@ -7,9 +7,10 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `runtime` | ✅ | ControlLoop and BasicSandboxRouter |
+//! | `runtime` | ✅ | ControlLoop (uses ToolSet) |
 //! | `store-memory` | ✅ | In-memory SessionStore implementation |
 //! | `sandbox-local` | ✅ | Local process Sandbox implementation |
+//! | `tools` | ✅ | ToolSet registry + standard tools |
 //! | `llm-protocol` | ❌ | Common LLM protocol layer |
 //! | `llm-anthropic` | ❌ | Anthropic Claude LLM backend |
 //! | `llm-openai` | ❌ | OpenAI-compatible LLM backend |
@@ -19,7 +20,7 @@
 /// Core traits and types. Always available.
 pub use lattice_core as core;
 
-/// ControlLoop implementation.
+/// ControlLoop implementation (uses ToolSet).
 #[cfg(feature = "runtime")]
 pub use lattice_runtime as runtime;
 
@@ -30,6 +31,10 @@ pub use lattice_store_memory as store_memory;
 /// Local process Sandbox.
 #[cfg(feature = "sandbox-local")]
 pub use lattice_sandbox_local as sandbox_local;
+
+/// ToolSet registry and standard tool implementations.
+#[cfg(feature = "tools")]
+pub use lattice_tools as tools;
 
 /// Common LLM protocol layer.
 #[cfg(feature = "llm-protocol")]

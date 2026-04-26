@@ -14,18 +14,34 @@ Lattice 的架构灵感来自 Anthropic 的 Managed Agents 博客（*Scaling Man
 ```
 ┌──────────────────────────────────────────────┐
 │              ControlLoop (大脑)                │
-│  依赖三个 trait:                               │
+│  依赖两个 trait:                               │
 │  - SessionStore                               │
 │  - LLMClient                                  │
-│  - SandboxRouter                              │
-└──────┬───────────────┬───────────────┬───────┘
+│  持有 ToolSet（工具注册表）                     │
+└──────┬───────────────┬───────────────┬─────────┘
        │               │               │
-  ┌────▼─────┐   ┌─────▼─────┐  ┌─────▼───────┐
-  │ Session  │   │ LLMClient │  │ SandboxRouter│
-  │  Store   │   │           │  │              │
-  │ (trait)  │   │ (trait)   │  │ (trait)      │
-  └──────────┘   └───────────┘  └──────────────┘
+  ┌────▼─────┐   ┌─────▼─────┐  ┌─────▼───────────┐
+  │ Session  │   │ LLMClient │  │   ToolSet       │
+  │  Store   │   │           │  │ (注册表 + 执行) │
+  │ (trait)  │   │ (trait)   │  │ (可组合实现)   │
+  └──────────┘   └───────────┘  └───────┬─────────┘
+                                        │ ToolExecutor trait
+                                  ┌─────▼─────────┐
+                                  │ BashTool      │
+                                  │ (或任意工具)  │
+                                  │  └─ Sandbox  │
+                                  └──────────────┘
 ```
+
+### 工具三层体系
+
+Lattice 的工具系统分为三层：
+
+1. **Layer 1（core）**：定义 `ToolExecutor` trait——所有工具的统一接口
+2. **Layer 2（lattice-tools）**：`ToolSet` 注册表 + 标准工具实现（BashTool）
+3. **Layer 3（应用层）**：注入自定义工具实现
+
+ControlLoop 通过 `ToolSet` 统一调用工具，不区分工具背后是沙箱执行还是进程内执行。
 
 ### 1. Session（会话）—— 不可变事件日志
 
@@ -141,20 +157,20 @@ pub trait SessionStore: Send + Sync {
 **关键特性**：
 - **无状态**：不持有持久状态，所有状态从 SessionStore 恢复
 - **可崩溃恢复**：进程崩溃后，用同一个 session_id 重新创建 ControlLoop，从事件日志断点继续
-- **不执行工具**：只负责路由，通过 SandboxRouter 将调用委托出去
+- **工具委托**：通过 ToolSet 执行工具调用，记录结果或错误事件
 
 **决策循环**：
 
 ```
 loop {
     1. 从 SessionStore 加载事件历史
-    2. 构建 LLM 提示（历史 + 可用工具 + 系统指令）
+    2. 从 ToolSet 获取可用工具描述，构建 LLM 提示
     3. 调用 LLMClient.decide()
     4. 记录决策事件
     5. match 决策:
        - FinalAnswer → 记录结果，退出循环
        - Thinking → 继续循环
-       - ToolCall → 通过 SandboxRouter 路由执行，继续循环
+       - ToolCall → 通过 ToolSet.execute(tool, params) 执行，记录结果/错误，继续循环
 }
 ```
 
@@ -220,20 +236,27 @@ pub struct ExecutionResult {
 }
 ```
 
-**SandboxRouter trait**：
+**ToolExecutor trait**：
 
 ```rust
 #[async_trait]
-pub trait SandboxRouter: Send + Sync {
-    /// 将工具调用路由到合适的沙箱并执行
-    /// 执行结果会作为新事件写入 SessionStore
-    async fn route(
-        &self,
-        session_id: SessionId,
-        parent_event_id: EventId,
-        tool: &str,
-        params: serde_json::Value,
-    ) -> Result<ExecutionResult, RouterError>;
+pub trait ToolExecutor: Send + Sync {
+    /// Return the tool description for LLM consumption.
+    fn description(&self) -> ToolDescription;
+
+    /// Execute the tool with the given parameters.
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError>;
+}
+```
+
+**ToolSet**：
+
+```rust
+pub struct ToolSet { ... }
+impl ToolSet {
+    pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> { ... }
+    pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
+    pub async fn execute(&self, name: &str, params: serde_json::Value) -> Result<ExecutionResult, ToolError> { ... }
 }
 ```
 
@@ -255,16 +278,15 @@ pub trait SandboxRouter: Send + Sync {
 4. [ControlLoop] 加载事件历史
    → SessionStore.get_events()
 
-5. [ControlLoop] 调用 LLM
+5. [ControlLoop] 从 ToolSet 获取工具描述，调用 LLM
    → LLMClient.decide(history, tools)
    → 记录 DecisionRecorded 事件
 
 6. [LLM 决定调用工具]
    → 记录 ToolCallRequested 事件
-   → SandboxRouter.route(tool, params)
+   → ToolSet.execute(tool, params)
 
-7. [SandboxRouter] 获取/创建沙箱
-   → Sandbox.execute(command, params)
+7. [ToolExecutor] 执行工具（如 BashTool → Sandbox.execute）
    → 记录 ToolCallResult 或 ToolCallError 事件
 
 8. [ControlLoop] 看到结果，回到步骤 4
@@ -522,9 +544,14 @@ pub struct BashTool {
 impl ToolExecutor for BashTool {
     fn description(&self) -> ToolDescription { /* bash tool schema */ }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError> {
-        let command = params["command"].as_str().ok_or(/* ... */)?;
-        self.sandbox.execute("bash", serde_json::json!({ "command": command })).await
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+        let command = params["command"].as_str().ok_or(ToolError::InvalidParams(
+            "missing 'command' field".to_string(),
+        ))?;
+        self.sandbox
+            .execute(command, params.clone())
+            .await
+            .map_err(ToolError::ExecutionFailed)
     }
 }
 ```
@@ -533,40 +560,42 @@ impl ToolExecutor for BashTool {
 
 ```rust
 /// File read tool — reads files in-process, no sandbox needed.
-pub struct FileReadTool { /* optional: allowed paths, size limits */ }
+pub struct FileReadTool {
+    allowed_paths: Vec<PathBuf>,
+}
 
 #[async_trait]
 impl ToolExecutor for FileReadTool {
     fn description(&self) -> ToolDescription { /* file_read tool schema */ }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError> {
-        let path = params["path"].as_str().ok_or(/* ... */)?;
-        let content = tokio::fs::read_to_string(path).await?;
-        Ok(ExecutionResult { stdout: content, stderr: String::new(), exit_code: 0 })
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+        let path = params["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidParams("missing 'path' field".to_string()))?;
+        let content = tokio::fs::read_to_string(path).await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        Ok(ExecutionResult {
+            stdout: content,
+            stderr: String::new(),
+            exit_code: 0,
+        })
     }
 }
 ```
 
 ### ToolSet 与 SandboxRouter 的关系
 
-`ToolSet` 统一了工具描述和工具执行两个职责，取代了之前 `Vec<ToolDescription>` + `SandboxRouter` 的分离模式。
+`ToolSet` 统一了工具描述和工具执行两个职责，取代了之前的 `Vec<ToolDescription>` + `SandboxRouter` 分离模式。
 
-引入 ToolSet 后，`SandboxRouter` trait 和 `BasicSandboxRouter` 将被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 改为接收 `ToolSet`：
+`SandboxRouter` trait 和 `BasicSandboxRouter` 已被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 改为持有 `Arc<ToolSet>`：
 
 ```rust
 // Before:
-let control_loop = ControlLoop::with_options(store, llm, router, tools, prompt, max_iter);
+let control_loop = ControlLoop::with_options(store, llm, router, vec![], prompt, max_iter);
 
 // After:
-let tools = ToolSet::with_defaults(sandbox)
-    .add(MyCustomTool::new());
-
-let control_loop = ControlLoop::builder()
-    .store(store)
-    .llm(llm)
-    .tools(tools)
-    .system_prompt("You are a helpful agent.")
-    .build();
+let tools = Arc::new(ToolSet::with_defaults(sandbox));
+let control_loop = ControlLoop::new(store, llm, tools);
 ```
 
 ### Crate 结构

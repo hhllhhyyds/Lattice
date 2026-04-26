@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 lattice-core = { path = "../core" }
+lattice-tools = { path = "../tools" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }

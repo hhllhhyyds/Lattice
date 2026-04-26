@@ -695,6 +695,7 @@ dependencies = [
  "lattice-runtime",
  "lattice-sandbox-local",
  "lattice-store-memory",
+ "lattice-tools",
 ]
 
 [[package]]
@@ -758,6 +759,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "lattice-core",
+ "lattice-tools",
  "serde",
  "serde_json",
  "tokio",
@@ -816,6 +818,19 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "lattice-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lattice-core",
+ "lattice-sandbox-local",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
