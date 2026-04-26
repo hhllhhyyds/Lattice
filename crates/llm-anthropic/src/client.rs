@@ -329,6 +329,129 @@ mod tests {
     }
 
     #[test]
+    fn test_to_anthropic_messages_user() {
+        let client = AnthropicClient::new("key", "claude");
+        let messages = vec![Message::text(Role::User, "hello")];
+        let result = client.to_anthropic_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "user");
+        match &result[0].content {
+            AnthropicContent::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_to_anthropic_messages_assistant() {
+        let client = AnthropicClient::new("key", "claude");
+        let messages = vec![Message::text(Role::Assistant, "I think...")];
+        let result = client.to_anthropic_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "assistant");
+    }
+
+    #[test]
+    fn test_to_anthropic_messages_system() {
+        let client = AnthropicClient::new("key", "claude");
+        // System role maps to "user" (system prompt handled separately in decide())
+        let messages = vec![Message::text(Role::System, "instructions")];
+        let result = client.to_anthropic_messages(&messages);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "user");
+    }
+
+    #[test]
+    fn test_to_anthropic_content_single_text_non_tool_role() {
+        let client = AnthropicClient::new("key", "claude");
+        let blocks = vec![ContentBlock::Text {
+            text: "hello".into(),
+        }];
+        let result = client.to_anthropic_content(&blocks, Role::User);
+        match result {
+            AnthropicContent::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("expected Text, got Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_to_anthropic_content_single_text_tool_role() {
+        let client = AnthropicClient::new("key", "claude");
+        // Tool role with single text → Blocks (not simple Text)
+        let blocks = vec![ContentBlock::Text {
+            text: "hello".into(),
+        }];
+        let result = client.to_anthropic_content(&blocks, Role::Tool);
+        match &result {
+            AnthropicContent::Blocks(b) => assert_eq!(b.len(), 1),
+            _ => panic!("expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_to_anthropic_content_tool_result() {
+        let client = AnthropicClient::new("key", "claude");
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "toolu_1".into(),
+            content: "result output".into(),
+            is_error: false,
+        }];
+        let result = client.to_anthropic_content(&blocks, Role::User);
+        match &result {
+            AnthropicContent::Blocks(b) => {
+                assert_eq!(b.len(), 1);
+                match &b[0] {
+                    AnthropicContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } => {
+                        assert_eq!(tool_use_id, "toolu_1");
+                        assert_eq!(content, "result output");
+                        assert!(is_error.is_none());
+                    }
+                    _ => panic!("expected ToolResult block"),
+                }
+            }
+            _ => panic!("expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_to_anthropic_content_tool_result_with_error() {
+        let client = AnthropicClient::new("key", "claude");
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "toolu_2".into(),
+            content: "error msg".into(),
+            is_error: true,
+        }];
+        let result = client.to_anthropic_content(&blocks, Role::User);
+        match &result {
+            AnthropicContent::Blocks(b) => match &b[0] {
+                AnthropicContentBlock::ToolResult { is_error, .. } => {
+                    assert_eq!(is_error, &Some(true));
+                }
+                _ => panic!("expected ToolResult"),
+            },
+            _ => panic!("expected Blocks"),
+        }
+    }
+
+    #[test]
+    fn test_parse_text_response_single_block() {
+        let client = AnthropicClient::new("key", "claude");
+        let response = AnthropicResponse {
+            content: vec![AnthropicContentBlock::Text { text: "hi".into() }],
+            stop_reason: None,
+            usage: None,
+        };
+        let result = client.parse_response(response);
+        match result {
+            LLMResponse::Text { text } => assert_eq!(text, "hi"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
     fn test_request_serialization() {
         let request = AnthropicRequest {
             model: "claude-sonnet-4-20250514".into(),

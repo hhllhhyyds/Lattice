@@ -62,6 +62,14 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 - `./scripts/check.sh` — fmt + clippy + test + doc 一键检查
 - `./scripts/test-local.sh` — 包含真实 LLM 集成测试（需要 `.env`）
 
+#### 测试覆盖率
+
+使用 `cargo-llvm-cov` 检测代码覆盖率。覆盖率报告作为 CI 的一部分运行，不阻断合并，但作为参考指标。
+
+- **生成报告**：`cargo llvm-cov report --lcov --output-path lcov.info` 生成 LCOV 格式，供 CI 工具展示覆盖率趋势
+- **指标**：按 crate 维度统计 line coverage 和 branch coverage
+- **目标**：非数值目标，保持覆盖率不下降为主要原则；新增代码应附带对应的测试
+
 ### 阶段 5：AI Review（自动代码审查）
 
 **由 Claude Code 完成**，在人工 review 之前执行。

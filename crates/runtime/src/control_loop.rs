@@ -587,4 +587,104 @@ mod tests {
             events
         );
     }
+
+    #[tokio::test]
+    async fn test_with_options_custom_system_prompt() {
+        let session_id = SessionId::new_v4();
+        let store = Arc::new(TestStore::new());
+        insert_test_session(&store, session_id);
+
+        let llm = Arc::new(TestLLM::new(Decision::FinalAnswer {
+            answer: "done".into(),
+        }));
+        let tools = make_tools();
+
+        let control_loop =
+            crate::ControlLoop::with_options(store, llm, tools, "custom prompt".into(), 50);
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "done");
+    }
+
+    #[tokio::test]
+    async fn test_store_get_events_error_returns_error_event() {
+        let session_id = SessionId::new_v4();
+
+        // LLM returns Thinking first, which should trigger a store.append_event error
+        // when we use a store that fails on append_event.
+        struct FailingAppendStore {
+            inner: Arc<TestStore>,
+        }
+        impl FailingAppendStore {
+            fn with_session(session_id: SessionId) -> Self {
+                let store = TestStore::new();
+                store.insert_session(
+                    session_id,
+                    vec![Event {
+                        event_id: lattice_core::EventId::new_v4(),
+                        session_id,
+                        timestamp: chrono::Utc::now(),
+                        actor: Actor::System,
+                        payload: EventPayload::SessionCreated,
+                        parent_event_id: None,
+                    }],
+                );
+                Self {
+                    inner: Arc::new(store),
+                }
+            }
+        }
+        #[async_trait]
+        impl lattice_core::SessionStore for FailingAppendStore {
+            async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
+                self.inner.create_session().await
+            }
+            async fn append_event(
+                &self,
+                _session_id: SessionId,
+                _payload: EventPayload,
+                _actor: Actor,
+                _parent_event_id: Option<lattice_core::EventId>,
+            ) -> Result<lattice_core::EventId, lattice_core::error::StoreError> {
+                Err(lattice_core::error::StoreError::SessionNotFound(
+                    SessionId::new_v4(),
+                ))
+            }
+            async fn get_events(
+                &self,
+                session_id: SessionId,
+                filter: &EventFilter,
+            ) -> Result<Vec<Event>, lattice_core::error::StoreError> {
+                self.inner.get_events(session_id, filter).await
+            }
+            async fn latest_event_id(
+                &self,
+                session_id: SessionId,
+            ) -> Result<Option<lattice_core::EventId>, lattice_core::error::StoreError>
+            {
+                self.inner.latest_event_id(session_id).await
+            }
+        }
+
+        let llm = Arc::new(TestLLM::new(Decision::Thinking {
+            reasoning: "thinking".into(),
+        }));
+        let tools = make_tools();
+
+        let failing_store = FailingAppendStore::with_session(session_id);
+
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::new(failing_store),
+            llm,
+            tools,
+            "prompt".into(),
+            2,
+        );
+        let result = control_loop.run(session_id).await;
+        // append_event fails with SessionNotFound, which propagates via ? and returns immediately.
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("session not found"));
+    }
 }
