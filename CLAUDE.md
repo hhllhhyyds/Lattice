@@ -13,6 +13,11 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 5. **ControlLoop 无状态**：控制循环不持有持久状态，可从 SessionStore 的事件流中随时恢复。
 6. **Feature 组合，按需裁剪**：所有非核心功能通过 Rust feature flags 控制。core crate 零 feature（纯接口），实现 crate 独立成包，facade crate `lattice` 通过 feature 重导出。消费者只编译需要的部分。
 7. **工具三层体系**：工具分三层——core 定义 `ToolExecutor` trait（Layer 1）、`lattice-tools` 提供标准工具库（Layer 2）、应用层注入自定义工具（Layer 3）。ControlLoop 通过 `ToolSet` 统一调用，不区分工具背后是沙箱执行还是进程内执行。
+8. **TDD: Tests First, Code Second.**
+   - For every task, write tests BEFORE implementation.
+   - Tests must be reviewable independently — push tests as a separate commit or PR.
+   - Wait for human approval of tests before writing implementation code.
+   - Tests define the contract. Implementation fulfills it.
 
 ## 文档索引
 
@@ -69,7 +74,14 @@ lattice               # 通过 feature flags 重导出所有子 crate
 
 1. 先读 `docs/ARCHITECTURE.md` 理解整体设计
 2. 确认要实现的组件在 `docs/ROADMAP.md` 路线图范围内
-3. 按架构文档中的 trait 定义编写代码
-4. 写测试，运行 `./scripts/check.sh` 确保 fmt + clippy + test + doc 全部通过
-5. 如有 `.env` 文件，运行 `./scripts/test-local.sh` 跑真实 LLM 集成测试
-6. 提交时遵守 commit 信息规范
+3. **TDD Phase 1（测试先行）**：先写会失败的测试（单元测试 + 集成测试），定义功能的预期行为
+   - 测试文件必须能编译但断言会失败（Red 阶段）
+   - 用 `test: add tests for #XX (<feature name>)` 提交测试
+   - **停下来等人工审查测试**
+4. **人工审查测试**：确认测试覆盖了你期望的行为、无遗漏的边界情况后再继续
+5. **TDD Phase 2（实现）**：人工批准测试后，实现最小代码让所有测试通过
+   - 用 `feat: implement #XX (<feature name>)` 提交实现
+6. 运行 `./scripts/check.sh` 确保 fmt + clippy + test + doc 全部通过
+7. 如有 `.env` 文件，运行 `./scripts/test-local.sh` 跑真实 LLM 集成测试
+8. AI 自我 review 后提交人工审查
+9. 提交时遵守 commit 信息规范
