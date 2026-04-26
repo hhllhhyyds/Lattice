@@ -1,6 +1,6 @@
 //! Hello Agent — end-to-end validation of the Lattice framework.
 //!
-//! Assembles `MemoryStore + LocalSandbox + BasicSandboxRouter + ControlLoop`
+//! Assembles `MemoryStore + LocalSandbox + ToolSet + ControlLoop`
 //! and drives them with a `MockLLMClient` that returns a fixed two-step decision
 //! sequence: ToolCall (bash) → FinalAnswer.
 //!
@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use lattice::core::{Actor, EventFilter, EventPayload};
-use lattice::runtime::{BasicSandboxRouter, ControlLoop};
+use lattice::runtime::ControlLoop;
 use lattice::sandbox_local::LocalSandbox;
 use lattice::store_memory::MemoryStore;
+use lattice::tools::ToolSet;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -29,10 +30,9 @@ async fn main() -> Result<()> {
     let store: Arc<dyn lattice::core::SessionStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
     let llm = Arc::new(mock_llm::MockLLMClient::hello_agent_sequence());
-    let router = Arc::new(BasicSandboxRouter::new(sandbox, store.clone()));
+    let tools = Arc::new(ToolSet::with_defaults(sandbox));
 
-    let control_loop =
-        ControlLoop::with_options(store.clone(), llm, router, vec![], String::new(), 50);
+    let control_loop = ControlLoop::with_options(store.clone(), llm, tools, String::new(), 50);
 
     // ── 2. Create session ───────────────────────────────────────────────────
     let session_id = control_loop.store().create_session().await?;

@@ -11,9 +11,9 @@ description = "A Rust meta-framework for building AI agents, inspired by Anthrop
 path = "src/lib.rs"
 
 [features]
-default = ["runtime", "store-memory", "sandbox-local"]
+default = ["runtime", "store-memory", "sandbox-local", "tools"]
 
-# Core runtime
+# Core runtime (transitively pulls in lattice-tools)
 runtime = ["dep:lattice-runtime"]
 
 # Store backends
@@ -22,6 +22,9 @@ store-memory = ["dep:lattice-store-memory"]
 # Sandbox implementations
 sandbox-local = ["dep:lattice-sandbox-local"]
 
+# Tool set (ToolSet + standard tools)
+tools = ["dep:lattice-tools"]
+
 # LLM backends
 llm-protocol = ["dep:lattice-llm-protocol"]
 llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
@@ -29,13 +32,14 @@ llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
 llm-all = ["llm-anthropic", "llm-openai"]
 
 # Convenience
-full = ["runtime", "store-memory", "sandbox-local", "llm-all"]
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
 
 [dependencies]
 lattice-core = { path = "crates/core" }
 lattice-runtime = { path = "crates/runtime", optional = true }
 lattice-store-memory = { path = "crates/store-memory", optional = true }
 lattice-sandbox-local = { path = "crates/sandbox-local", optional = true }
+lattice-tools = { path = "crates/tools", optional = true }
 lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
 lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
 lattice-llm-openai = { path = "crates/llm-openai", optional = true }
@@ -50,6 +54,7 @@ members = [
     "crates/llm-protocol",
     "crates/llm-anthropic",
     "crates/llm-openai",
+    "crates/tools",
     "crates/server",
     "examples/hello-agent",
     "examples/real-agent",

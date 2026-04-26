@@ -18,10 +18,11 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use lattice::core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore, ToolDescription};
-use lattice::runtime::{BasicSandboxRouter, ControlLoop};
+use lattice::core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore};
+use lattice::runtime::ControlLoop;
 use lattice::sandbox_local::LocalSandbox;
 use lattice::store_memory::MemoryStore;
+use lattice::tools::ToolSet;
 use tracing::info;
 
 fn main() -> Result<()> {
@@ -80,30 +81,13 @@ async fn run(task: String) -> Result<()> {
         }
     };
 
-    // Define the bash tool.
-    let tools = vec![ToolDescription {
-        name: "bash".into(),
-        description: "Execute a bash command on the local machine. Use this to run shell commands, inspect files, check system status, etc.".into(),
-        parameters_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The bash command to execute"
-                }
-            },
-            "required": ["command"]
-        }),
-    }];
-
     // Assemble the agent components.
     let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
-    let router = Arc::new(BasicSandboxRouter::new(sandbox, store.clone()));
+    let tools = Arc::new(ToolSet::with_defaults(sandbox));
     let control_loop = ControlLoop::with_options(
         store.clone(),
         llm,
-        router,
         tools,
         "You are a helpful agent. You can execute bash commands using the bash tool. \
          Always use the bash tool when you need to interact with the system. \

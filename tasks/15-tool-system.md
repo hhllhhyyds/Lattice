@@ -426,18 +426,18 @@ async fn bash_tool_invalid_params() {
 
 ## 验收标准
 
-- [ ] `ToolExecutor` trait 定义在 `lattice-core`，有完整 doc comment
-- [ ] `ToolError` 替代 `RouterError`，覆盖所有错误场景
-- [ ] `ToolSet` 实现工具注册、描述列表、按名执行
-- [ ] `BashTool` 实现 `ToolExecutor`，正确委托 Sandbox 执行
-- [ ] `ControlLoop` 改为使用 `ToolSet`，不再依赖 `SandboxRouter`
-- [ ] 事件记录职责回收到 `ControlLoop`（不在工具执行层记录）
-- [ ] `SandboxRouter` trait、`BasicSandboxRouter`、`RouterError` 全部删除
-- [ ] `Sandbox` trait 保留不变（仍然是隔离执行环境的抽象）
-- [ ] 两个 example 更新并正常编译运行
-- [ ] Facade crate 新增 `tools` feature，`full` feature 包含 `tools-full`
-- [ ] 所有 pub 类型和方法有英文 doc comment
-- [ ] 四项检查全部通过：
+- [x] `ToolExecutor` trait 定义在 `lattice-core`，有完整 doc comment
+- [x] `ToolError` 替代 `RouterError`，覆盖所有错误场景
+- [x] `ToolSet` 实现工具注册、描述列表、按名执行
+- [x] `BashTool` 实现 `ToolExecutor`，正确委托 Sandbox 执行
+- [x] `ControlLoop` 改为使用 `ToolSet`，不再依赖 `SandboxRouter`
+- [x] 事件记录职责回收到 `ControlLoop`（不在工具执行层记录）
+- [x] `SandboxRouter` trait、`BasicSandboxRouter`、`RouterError` 全部删除
+- [x] `Sandbox` trait 保留不变（仍然是隔离执行环境的抽象）
+- [x] 两个 example 更新并正常编译运行
+- [x] Facade crate 新增 `tools` feature，`full` feature 包含 `tools`
+- [x] 所有 pub 类型和方法有英文 doc comment
+- [x] 四项检查全部通过：
   - `cargo fmt --all -- --check`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test --all-targets --all-features`
