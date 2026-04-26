@@ -2,7 +2,9 @@
 //!
 //! Run with: cargo test -p lattice-llm-openai --all-features -- --ignored
 
-use lattice_core::{Actor, Decision, Event, EventId, EventPayload, LLMClient, SessionId, ToolDescription};
+use lattice_core::{
+    Actor, Decision, Event, EventId, EventPayload, LLMClient, SessionId, ToolDescription,
+};
 use lattice_llm_openai::OpenAIClient;
 
 /// Helper: create a minimal event history with a user message.
