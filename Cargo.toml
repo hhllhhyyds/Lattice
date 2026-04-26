@@ -34,6 +34,11 @@ llm-all = ["llm-anthropic", "llm-openai"]
 # Convenience
 full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
 
+[dev-dependencies]
+dotenvy = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
 [dependencies]
 lattice-core = { path = "crates/core" }
 lattice-runtime = { path = "crates/runtime", optional = true }
@@ -85,3 +90,4 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 hyper = "1"
 http-body-util = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
+dotenvy = "0.15"

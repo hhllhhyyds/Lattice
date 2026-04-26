@@ -74,3 +74,70 @@ pub enum ToolError {
     #[error("tool error: {0}")]
     Other(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::StoreError;
+    use super::{LLMError, SandboxError, ToolError};
+
+    #[test]
+    fn test_store_error_display() {
+        let sid = uuid::Uuid::new_v4();
+        let err = StoreError::SessionNotFound(sid);
+        assert!(err.to_string().contains("session not found"));
+        assert!(err.to_string().contains(&sid.to_string()));
+
+        let err = StoreError::SerializationError("bad json".to_string());
+        assert_eq!(err.to_string(), "serialization error: bad json");
+
+        let err = StoreError::Other("oops".to_string());
+        assert_eq!(err.to_string(), "store error: oops");
+    }
+
+    #[test]
+    fn test_llm_error_display() {
+        let err = LLMError::RequestFailed("timeout".to_string());
+        assert_eq!(err.to_string(), "request failed: timeout");
+
+        let err = LLMError::InvalidResponse("malformed".to_string());
+        assert_eq!(err.to_string(), "invalid response: malformed");
+
+        let err = LLMError::Other("oops".to_string());
+        assert_eq!(err.to_string(), "LLM error: oops");
+    }
+
+    #[test]
+    fn test_sandbox_error_display() {
+        let err = SandboxError::ExecutionFailed("exit 1".to_string());
+        assert_eq!(err.to_string(), "execution failed: exit 1");
+
+        let err = SandboxError::Timeout { timeout_secs: 30 };
+        assert!(err.to_string().contains("30"));
+        assert!(err.to_string().contains("timeout"));
+
+        let err = SandboxError::Unavailable("not ready".to_string());
+        assert_eq!(err.to_string(), "sandbox unavailable: not ready");
+
+        let err = SandboxError::Other("crash".to_string());
+        assert_eq!(err.to_string(), "sandbox error: crash");
+    }
+
+    #[test]
+    fn test_tool_error_display() {
+        let err = ToolError::NotFound("bash".to_string());
+        assert_eq!(err.to_string(), "tool not found: bash");
+
+        let err = ToolError::InvalidParams("missing key".to_string());
+        assert_eq!(err.to_string(), "invalid parameters: missing key");
+
+        let err = ToolError::ExecutionFailed("segfault".to_string());
+        assert_eq!(err.to_string(), "execution failed: segfault");
+
+        let err = ToolError::Timeout { timeout_secs: 60 };
+        assert!(err.to_string().contains("60"));
+        assert!(err.to_string().contains("timeout"));
+
+        let err = ToolError::Other("misc".to_string());
+        assert_eq!(err.to_string(), "tool error: misc");
+    }
+}

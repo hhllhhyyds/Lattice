@@ -4,3 +4,4 @@ target/
 *.swo
 *~
 .omc/
+.env
