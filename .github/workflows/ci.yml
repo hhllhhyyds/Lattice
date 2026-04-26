@@ -53,6 +53,8 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -64,11 +66,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Coverage
-        uses: cargo-llvm-cov/cargo-llvm-cov-action@v0.2
-        with:
-          version: latest
-          lcov: true
-          output-file: lcov.info
-          cargo-llvm-cov-args: --all-features
-          token: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          cargo llvm-cov test --workspace --all-features -- --nocapture
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov upload --lcov-file lcov.info
