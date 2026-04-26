@@ -10,6 +10,7 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 2. **CLAUDE.md 是入口**：Claude Code 通过 CLAUDE.md 找到所有需要的上下文
 3. **小步快跑**：每次任务范围小而明确，一个 PR 解决一个问题
 4. **测试先行**：每次实现必须附带测试
+5. **TDD：测试优先于实现**：测试是规格的具体化；先让人审查测试（确认要做什么），再实现代码（确认怎么做）
 
 ## 工作流阶段
 
@@ -35,13 +36,22 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 
 ### 阶段 3：Implement（实现）
 
-**由 Claude Code 完成**。
+**TDD Phase 1 — 写测试（先于实现）**：
 
 - 每个任务启动一个 Claude Code session
-- Claude Code 读取 CLAUDE.md → 找到相关文档 → 理解上下文 → 编写代码
+- Claude Code 读取 CLAUDE.md → 找到相关文档 → 理解上下文
+- **先写会失败的测试**，定义功能的预期行为（单元测试 + 集成测试）
+- 测试文件必须能编译，但断言会失败（Red 阶段）
 - 一个任务对应一个 feature 分支：`feat/<task-name>`
+- 提交消息格式：`test: add tests for #XX (<feature name>)`
+- **停下来，等人工审查测试**
 
-**给 Claude Code 的标准指令模板**：
+**TDD Phase 2 — 实现代码（等测试批准后）**：
+
+- 人工批准测试后，Claude Code 实现最小代码让所有测试通过
+- 提交消息格式：`feat: implement #XX (<feature name>)`
+
+**给 Claude Code 的标准指令模板（Phase 1）**：
 
 ```
 读取 CLAUDE.md 了解项目上下文。
@@ -49,11 +59,33 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 任务：<具体任务描述>
 
 要求：
-1. 按照 docs/ARCHITECTURE.md 中的 trait 定义实现
-2. 写单元测试和集成测试
-3. 运行 `./scripts/check.sh` 确保全部通过
-4. 完成后提交到 feat/<branch-name> 分支
+1. 先写会失败的测试（单元测试 + 集成测试），定义预期行为
+2. 测试必须能编译，但断言会失败（Red）
+3. 用 "test: add tests for #XX (<feature name>)" 提交
+4. 停下来等人工审查测试
 ```
+
+**给 Claude Code 的标准指令模板（Phase 2）**：
+
+```
+人工已批准测试。现在实现最小代码让所有测试通过。
+
+要求：
+1. 实现前先跑测试确认处于 Red 状态
+2. 实现后确保所有测试通过（Green）
+3. 如需要可做重构（Refactor）
+4. 运行 `./scripts/check.sh` 确保全部通过
+5. 用 "feat: implement #XX (<feature name>)" 提交
+```
+
+### TDD 为什么重要
+
+测试是最容易理解的规格形式。人工审查测试代码时，审查的是**功能要做什么**（而非代码怎么实现）。这比混在一起的测试+实现更容易理解，也更容易发现理解偏差。
+
+- **质量**：Bug 在规格阶段捕获，而非实现后
+- **沟通**：人和 AI 通过测试共享同一份理解
+- **效率**：不会在错误理解的需求上浪费实现工作
+- **可追溯**：先写测试的 commit 证明了测试是独立于实现完成的
 
 ### 阶段 4：Test（测试验证）
 
