@@ -28,7 +28,7 @@ pub enum Actor {
 }
 
 /// Event payload — all possible events in the system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum EventPayload {
     /// Session was created.
@@ -71,4 +71,120 @@ pub struct Event {
     pub payload: EventPayload,
     /// Parent event (for correlation).
     pub parent_event_id: Option<EventId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_actor_serde_roundtrip() {
+        for actor in [Actor::System, Actor::LLM, Actor::Harness, Actor::Sandbox] {
+            let json = serde_json::to_string(&actor).unwrap();
+            let parsed: Actor = serde_json::from_str(&json).unwrap();
+            assert_eq!(actor, parsed);
+        }
+    }
+
+    #[test]
+    fn test_event_payload_serde_roundtrip() {
+        let payloads = vec![
+            EventPayload::SessionCreated,
+            EventPayload::UserMessage {
+                content: "hello world".to_string(),
+            },
+            EventPayload::Thinking {
+                reasoning: "let me think".to_string(),
+            },
+            EventPayload::ToolCallRequested {
+                tool: "bash".to_string(),
+                params: serde_json::json!({ "command": "echo hi" }),
+            },
+            EventPayload::ToolCallResult {
+                stdout: "hi".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+            },
+            EventPayload::ToolCallError {
+                error: "not found".to_string(),
+            },
+            EventPayload::FinalAnswer {
+                answer: "the answer".to_string(),
+            },
+            EventPayload::StateChange {
+                from: "idle".to_string(),
+                to: "running".to_string(),
+            },
+        ];
+        for payload in payloads {
+            let json = serde_json::to_string(&payload).unwrap();
+            let parsed: EventPayload = serde_json::from_str(&json).unwrap();
+            assert_eq!(payload, parsed);
+        }
+    }
+
+    #[test]
+    fn test_event_serde_roundtrip() {
+        let event = Event {
+            event_id: EventId::new_v4(),
+            session_id: SessionId::new_v4(),
+            timestamp: chrono::Utc::now(),
+            actor: Actor::LLM,
+            payload: EventPayload::UserMessage {
+                content: "test message".to_string(),
+            },
+            parent_event_id: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(event.event_id, parsed.event_id);
+        assert_eq!(event.session_id, parsed.session_id);
+        assert_eq!(event.actor, parsed.actor);
+        assert_eq!(event.payload, parsed.payload);
+        assert_eq!(event.parent_event_id, parsed.parent_event_id);
+    }
+
+    #[test]
+    fn test_event_payload_tagged_format() {
+        let payload = EventPayload::UserMessage {
+            content: "hello".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains(r#""type":"userMessage"#));
+        assert!(json.contains(r#""content":"hello""#));
+    }
+
+    #[test]
+    fn test_tool_call_requested_tagged_format() {
+        let payload = EventPayload::ToolCallRequested {
+            tool: "bash".to_string(),
+            params: serde_json::json!({ "command": "ls" }),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains(r#""type":"toolCallRequested""#));
+        assert!(json.contains(r#""tool":"bash""#));
+    }
+
+    #[test]
+    fn test_tool_call_result_tagged_format() {
+        let payload = EventPayload::ToolCallResult {
+            stdout: "output".to_string(),
+            stderr: "err".to_string(),
+            exit_code: 0,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains(r#""type":"toolCallResult""#));
+        assert!(json.contains(r#""stdout":"output""#));
+        assert!(json.contains(r#""exit_code":0"#));
+    }
+
+    #[test]
+    fn test_final_answer_tagged_format() {
+        let payload = EventPayload::FinalAnswer {
+            answer: "42".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains(r#""type":"finalAnswer""#));
+        assert!(json.contains(r#""answer":"42""#));
+    }
 }

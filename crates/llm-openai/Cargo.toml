@@ -18,3 +18,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+dotenvy = { workspace = true }
+chrono = { workspace = true }

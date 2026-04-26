@@ -221,4 +221,44 @@ mod tests {
         assert!(names.contains(&"tool_a"));
         assert!(names.contains(&"tool_b"));
     }
+
+    #[tokio::test]
+    async fn test_execute_success_returns_result() {
+        let result = ExecutionResult {
+            stdout: "hello world".to_string(),
+            stderr: "err output".to_string(),
+            exit_code: 42,
+        };
+        let tool = MockTool::new("success", Ok(result.clone()));
+        let mut set = ToolSet::new();
+        set.register(tool).unwrap();
+
+        let got = set.execute("success", serde_json::json!({})).await.unwrap();
+        assert_eq!(got.stdout, "hello world");
+        assert_eq!(got.stderr, "err output");
+        assert_eq!(got.exit_code, 42);
+    }
+
+    #[cfg(feature = "bash")]
+    #[test]
+    fn test_with_defaults_contains_bash() {
+        use lattice_core::Sandbox;
+        use std::sync::Arc;
+
+        struct MockSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for MockSandbox {
+            async fn execute(
+                &self,
+                _command: &str,
+                _params: serde_json::Value,
+            ) -> Result<lattice_core::ExecutionResult, lattice_core::SandboxError> {
+                unreachable!()
+            }
+        }
+
+        let set = crate::ToolSet::with_defaults(Arc::new(MockSandbox));
+        assert!(set.contains("bash"));
+        assert_eq!(set.len(), 1);
+    }
 }

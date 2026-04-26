@@ -448,4 +448,143 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max iterations"));
     }
+
+    #[tokio::test]
+    async fn test_tool_not_found_records_error_event() {
+        let session_id = SessionId::new_v4();
+        let store = Arc::new(TestStore::new());
+        insert_test_session(&store, session_id);
+        use lattice_core::SessionStore;
+
+        // LLM returns ToolCall for "nonexistent" first, then FinalAnswer.
+        struct TwoStepLLM(Arc<Mutex<bool>>);
+        impl TwoStepLLM {
+            fn new() -> Self {
+                Self(Arc::new(Mutex::new(false)))
+            }
+        }
+        #[async_trait]
+        impl LLMClient for TwoStepLLM {
+            async fn decide(
+                &self,
+                _history: &[Event],
+                _available_tools: &[ToolDescription],
+                _system_prompt: &str,
+            ) -> Result<Decision, LLMError> {
+                let mut called = self.0.lock().unwrap();
+                if !*called {
+                    *called = true;
+                    Ok(Decision::ToolCall {
+                        tool: "nonexistent".to_string(),
+                        params: serde_json::json!({}),
+                    })
+                } else {
+                    Ok(Decision::FinalAnswer {
+                        answer: "done after error".to_string(),
+                    })
+                }
+            }
+        }
+
+        let llm = Arc::new(TwoStepLLM::new());
+        let tools = make_tools(); // empty — no tools registered
+
+        let control_loop = crate::ControlLoop::new(store.clone(), llm, tools);
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "done after error");
+
+        // Verify the event log contains a ToolCallError.
+        let events = store
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+        let has_error = events
+            .iter()
+            .any(|e| matches!(e.payload, EventPayload::ToolCallError { .. }));
+        assert!(
+            has_error,
+            "expected ToolCallError in event log, got: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multi_step_thinking_then_tool_then_answer() {
+        let session_id = SessionId::new_v4();
+        let store = Arc::new(TestStore::new());
+        insert_test_session(&store, session_id);
+
+        // Returns: Thinking → ToolCall → FinalAnswer
+        struct ThreeStepLLM(Arc<Mutex<usize>>);
+        impl ThreeStepLLM {
+            fn new() -> Self {
+                Self(Arc::new(Mutex::new(0)))
+            }
+        }
+        #[async_trait]
+        impl LLMClient for ThreeStepLLM {
+            async fn decide(
+                &self,
+                _history: &[Event],
+                _available_tools: &[ToolDescription],
+                _system_prompt: &str,
+            ) -> Result<Decision, LLMError> {
+                let mut step = self.0.lock().unwrap();
+                *step += 1;
+                match *step {
+                    1 => Ok(Decision::Thinking {
+                        reasoning: "thinking".to_string(),
+                    }),
+                    2 => Ok(Decision::ToolCall {
+                        tool: "noop".to_string(),
+                        params: serde_json::json!({}),
+                    }),
+                    _ => Ok(Decision::FinalAnswer {
+                        answer: "final".to_string(),
+                    }),
+                }
+            }
+        }
+
+        let llm = Arc::new(ThreeStepLLM::new());
+        let tools = {
+            let mut ts = ToolSet::new();
+            ts.register(NoopTool).unwrap();
+            Arc::new(ts)
+        };
+
+        let control_loop = crate::ControlLoop::new(store.clone(), llm, tools);
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "final");
+
+        // Verify the event log contains Thinking, ToolCallRequested, ToolCallResult, FinalAnswer.
+        use lattice_core::SessionStore;
+        let events = store
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        let types: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e.payload {
+                EventPayload::Thinking { .. } => Some("Thinking"),
+                EventPayload::ToolCallRequested { .. } => Some("ToolCallRequested"),
+                EventPayload::ToolCallResult { .. } => Some("ToolCallResult"),
+                EventPayload::FinalAnswer { .. } => Some("FinalAnswer"),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            types,
+            vec![
+                "Thinking",
+                "ToolCallRequested",
+                "ToolCallResult",
+                "FinalAnswer"
+            ],
+            "expected events in order: {:?}",
+            events
+        );
+    }
 }
