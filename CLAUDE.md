@@ -12,12 +12,13 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 4. **接口有立场，实现无假设**：trait 定义严格，但对背后的技术选型（数据库、容器方案等）保持中立。
 5. **ControlLoop 无状态**：控制循环不持有持久状态，可从 SessionStore 的事件流中随时恢复。
 6. **Feature 组合，按需裁剪**：所有非核心功能通过 Rust feature flags 控制。core crate 零 feature（纯接口），实现 crate 独立成包，facade crate `lattice` 通过 feature 重导出。消费者只编译需要的部分。
+7. **工具三层体系**：工具分三层——core 定义 `ToolExecutor` trait（Layer 1）、`lattice-tools` 提供标准工具库（Layer 2）、应用层注入自定义工具（Layer 3）。ControlLoop 通过 `ToolSet` 统一调用，不区分工具背后是沙箱执行还是进程内执行。
 
 ## 文档索引
 
 | 文档 | 内容 |
 |------|------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：三组件定义、trait 接口、数据流、生命周期 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：三组件定义、trait 接口、数据流、生命周期、工具系统 |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | 技术选型及理由 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 项目路线图：已完成里程碑 + 当前进展 + 未来规划 |
 | [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) | AI 编程流程规范 |
@@ -28,12 +29,14 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 ```
 crates/
 ├── core/           # 核心 trait + 类型定义（零外部依赖，纯接口）
-├── runtime/        # ControlLoop 实现
+│                   #   ToolDescription（已有）+ ToolExecutor trait（新增）
+├── runtime/        # ControlLoop 实现（接收 ToolSet）
 ├── store-memory/   # SessionStore 内存实现（开发/测试用）
 ├── sandbox-local/  # Sandbox 本地子进程实现
 ├── llm-protocol/   # LLM 通用协议层（消息格式转换、响应解析）
 ├── llm-anthropic/  # LLMClient 的 Anthropic Claude 实现
 ├── llm-openai/     # LLMClient 的 OpenAI 兼容实现
+├── tools/          # 标准工具库（bash, file, glob, grep, http）
 ├── server/         # HTTP API 服务（axum），平台服务入口（第四轮）
 
 # Facade crate（根目录 src/lib.rs）

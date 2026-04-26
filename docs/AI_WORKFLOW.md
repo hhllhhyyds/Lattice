@@ -191,14 +191,19 @@ Lattice/
 │   │       ├── session.rs    # SessionStore trait、SessionId
 │   │       ├── llm.rs        # LLMClient trait、Decision、ToolDescription
 │   │       ├── sandbox.rs    # Sandbox trait、ExecutionResult
-│   │       ├── router.rs     # SandboxRouter trait
+│   │       ├── tool.rs       # ToolDescription、ToolExecutor trait
 │   │       └── error.rs      # 所有错误类型
 │   ├── runtime/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── control_loop.rs
-│   │       └── basic_router.rs
+│   ├── tools/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs        # ToolSet + re-exports
+│   │       ├── set.rs        # ToolSet 实现
+│   │       └── bash.rs       # BashTool 实现
 │   ├── store-memory/
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs

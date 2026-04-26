@@ -1,4 +1,4 @@
-# 任务 17：配置管理与多 Provider 支持
+# 任务 18：配置管理与多 Provider 支持
 
 > ⚠️ **STATUS: DRAFT — 未经人工 review，内容可能调整。**
 

@@ -6,8 +6,8 @@
 
 | Crate                 | 内容                                                                     | 状态 |
 | --------------------- | ------------------------------------------------------------------------ | ---- |
-| lattice-core          | 核心 trait + 类型定义（SessionStore、LLMClient、Sandbox、SandboxRouter） | ✅    |
-| lattice-runtime       | ControlLoop 决策循环 + BasicSandboxRouter                                | ✅    |
+| lattice-core          | 核心 trait + 类型定义（SessionStore、LLMClient、Sandbox、ToolExecutor） | ✅    |
+| lattice-runtime       | ControlLoop 决策循环                                                    | ✅    |
 | lattice-store-memory  | SessionStore 内存实现                                                    | ✅    |
 | lattice-sandbox-local | Sandbox 本地子进程实现                                                   | ✅    |
 | hello-agent example   | 端到端验证（MockLLMClient）                                              | ✅    |
@@ -45,10 +45,11 @@
 | 12 | [Facade crate + Feature Flags](../tasks/12-facade-features.md) | `feat/facade-features` | ✅ |
 | 13 | [Server crate 骨架 + 基础路由](../tasks/13-server-skeleton.md) | `feat/server-skeleton` | ✅ |
 | 14 | [会话管理 API](../tasks/14-session-api.md) | `feat/session-api` | ✅ |
-| 15 | [任务提交与 Agent 执行 API](../tasks/15-agent-run-api.md) | `feat/agent-run-api` | ⬜ |
-| 16 | [SSE 实时事件流](../tasks/16-sse-stream.md) | `feat/sse-stream` | ⬜ |
-| 17 | [配置管理与多 Provider 支持](../tasks/17-config-provider.md) | `feat/config-provider` | ⬜ |
-| 18 | [Docker 化独立部署](../tasks/18-docker-deploy.md) | `feat/docker-deploy` | ⬜ |
+| 15 | [工具系统：ToolExecutor + ToolSet + 标准工具库](../tasks/15-tool-system.md) | `feat/tool-system` | ⬜ |
+| 16 | [任务提交与 Agent 执行 API](../tasks/16-agent-run-api.md) | `feat/agent-run-api` | ⬜ |
+| 17 | [SSE 实时事件流](../tasks/17-sse-stream.md) | `feat/sse-stream` | ⬜ |
+| 18 | [配置管理与多 Provider 支持](../tasks/18-config-provider.md) | `feat/config-provider` | ⬜ |
+| 19 | [Docker 化独立部署](../tasks/19-docker-deploy.md) | `feat/docker-deploy` | ⬜ |
 
 ### API 端点预览
 
@@ -79,9 +80,9 @@ GET    /v1/providers                    → 列出可用 LLM provider
 - 事件历史压缩/摘要策略
 - 长会话的上下文滑动窗口
 
-### 多沙箱并行调度
-- SandboxRouter 支持多沙箱实例池
-- 按工具类型路由到不同沙箱
+### MCP 工具桥接
+- 实现 ToolExecutor 适配器，通过 MCP 协议调用外部工具服务器
+- 作为 Layer 3（Harness-Provided）工具注入
 
 ### 凭据管理
 - Vault Proxy 模式：沙箱外注入凭据
