@@ -141,15 +141,42 @@ Review 当前分支相对于 main 的所有改动（git diff main...HEAD）。
 
 **由 Claude Code 完成**，在 AI Review 通过后、人工 Review 之前执行。
 
-代码改完了不算完——文档必须跟着代码走。每次任务完成后，检查并更新以下文档：
+代码改完了不算完——文档必须跟着代码走。每次任务完成后，从修改的代码位置出发，**自下而上**扫描哪些文档需要更新：
 
-1. **CLAUDE.md**：如果新增了 crate、修改了 crate 结构、改变了核心原则，更新对应段落
-2. **docs/ARCHITECTURE.md**：如果引入了新的 trait、数据结构、组件交互方式，更新架构描述
-3. **docs/TECH_STACK.md**：如果引入了新的依赖（如 axum、tower-http、toml），添加选型理由
-4. **docs/ROADMAP.md**：将当前任务状态从 ⬜ 更新为 ✅
-5. **tasks/README.md**：同步任务状态
-6. **tasks/<当前任务>.md**：勾选验收标准中已完成的项
-7. **目录结构约定**（本文档最后一节）：如果文件结构有变化，保持一致
+```
+从修改的代码位置向上追溯：
+1. 修改的代码属于哪个 crate？
+   → 更新 crates/<crate>/CLAUDE.md（如该 crate 有专属 CLAUDE.md）
+2. 修改影响了哪些 trait 接口、组件交互、数据流？
+   → 更新 docs/ARCHITECTURE.md
+3. 引入了新依赖？
+   → 更新 docs/TECH_STACK.md
+4. 任务在 tasks/ 中有对应条目？
+   → 更新 tasks/README.md 和 tasks/<当前任务>.md（状态 ⬜ → ✅）
+5. 任务属于哪个里程碑？
+   → 更新 docs/ROADMAP.md
+6. 对整个项目结构或核心原则有影响？
+   → 更新根目录 CLAUDE.md（如文档索引、crate 结构图、跨 crate 规范）
+```
+
+**每个 crate 的 CLAUDE.md 更新原则**：当修改涉及该 crate 内部实现时，必须同步更新该 crate 的 CLAUDE.md。CLAUDE.md 的定位是"该 crate 内部的关键类型、设计决策、已知问题"，而非全局视角——所以它最接近代码，最需要跟着代码走。
+
+**根目录 CLAUDE.md 的更新范围**（全局视角，只写顶层结论）：
+1. 新增 crate → 更新"文档索引"和"crate 结构"两节
+2. 修改了跨 crate 规范（如新的 trait、新的接口约定）→ 更新对应段落
+3. 里程碑完成 → 更新 ROADMAP.md 状态
+
+**文档检查清单**（每次任务完成后逐项确认）：
+
+| 文档 | 触发条件 |
+|------|----------|
+| `crates/<crate>/CLAUDE.md` | 修改了该 crate 内部实现 |
+| `docs/ARCHITECTURE.md` | 新增/修改了 trait、数据结构、组件交互 |
+| `docs/TECH_STACK.md` | 新增依赖 |
+| `docs/ROADMAP.md` | 任务状态变更 |
+| `tasks/README.md` | 任务状态变更 |
+| `tasks/<任务>.md` | 验收标准完成 |
+| `CLAUDE.md`（根目录）| crate 结构变化、核心原则变化 |
 
 **原则**：
 - 文档即真相——如果文档和代码不一致，后来的人（包括 AI）会被误导
@@ -159,13 +186,13 @@ Review 当前分支相对于 main 的所有改动（git diff main...HEAD）。
 **给 Claude Code 的文档更新指令**（可附加在实现指令末尾）：
 
 ```
-实现完成后，检查并更新以下文档（如有变化）：
-- CLAUDE.md（crate 结构、核心原则）
-- docs/ARCHITECTURE.md（新 trait/组件/数据流）
-- docs/TECH_STACK.md（新依赖及选型理由）
-- docs/ROADMAP.md（任务状态 ⬜ → ✅）
-- tasks/README.md（任务状态同步）
-- tasks/<当前任务>.md（验收标准打勾）
+实现完成后，从修改的代码向上追溯，执行以下文档检查：
+1. 更新 crates/<crate>/CLAUDE.md（如果修改了该 crate 内部）
+2. 更新 docs/ARCHITECTURE.md（trait/组件/数据流变化）
+3. 更新 docs/TECH_STACK.md（新依赖）
+4. 更新 docs/ROADMAP.md（任务状态 ⬜ → ✅）
+5. 更新 tasks/README.md 和 tasks/<当前任务>.md
+6. 评估是否需要更新根目录 CLAUDE.md
 ```
 
 ### 阶段 7：人工 Review（最终审查）
