@@ -28,29 +28,32 @@ Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthro
 
 ```
 crates/
-├── core/           # 核心 trait + 类型定义（零外部依赖，纯接口）
-│                   #   ToolDescription（已有）+ ToolExecutor trait（新增）
-├── runtime/        # ControlLoop 实现（接收 ToolSet）
-├── store-memory/   # SessionStore 内存实现（开发/测试用）
-├── sandbox-local/  # Sandbox 本地子进程实现
-├── llm-protocol/   # LLM 通用协议层（消息格式转换、响应解析）
-├── llm-anthropic/  # LLMClient 的 Anthropic Claude 实现
-├── llm-openai/     # LLMClient 的 OpenAI 兼容实现
-├── tools/          # 标准工具库（bash, file, glob, grep, http）
-├── server/         # HTTP API 服务（axum），平台服务入口（第四轮）
+├── core/             # 核心 trait + 类型定义（零外部依赖，纯接口）
+├── runtime/          # ControlLoop 实现（接收 ToolSet）
+├── store-memory/     # SessionStore 内存实现（开发/测试用）
+├── sandbox-local/    # Sandbox 本地子进程实现
+├── llm-protocol/     # LLM 通用协议层（消息格式转换、响应解析）
+├── llm-anthropic/    # LLMClient 的 Anthropic Claude 实现
+├── llm-openai/       # LLMClient 的 OpenAI 兼容实现
+├── tools/            # 标准工具库（bash, file, glob, grep, http）
+├── server/           # HTTP API 服务（axum），平台服务入口
 
 # Facade crate（根目录 src/lib.rs）
-lattice                 # 通过 feature flags 重导出所有子 crate
+lattice               # 通过 feature flags 重导出所有子 crate
 ```
 
-## Feature Flag 策略
+每个 crate 都有其专属的 `CLAUDE.md` 文件，包含该 crate 的关键类型、设计决策、已知问题和依赖关系。工作在该 crate 目录时，Claude Code 会自动加载对应的上下文。
 
-- **core**：零 feature，纯接口
-- **facade `lattice`**：default = runtime + store-memory + sandbox-local；可选 llm-anthropic、llm-openai、llm-all、full
-- **server**：default = anthropic + openai；按 feature 控制编译哪些 provider/sandbox/store
-- 新增实现 crate 时必须同步更新 facade 的 feature 定义
+| Crate | CLAUDE.md |
+|-------|-----------|
+| `runtime` | [crates/runtime/CLAUDE.md](crates/runtime/CLAUDE.md) |
+| `tools` | [crates/tools/CLAUDE.md](crates/tools/CLAUDE.md) |
+| `llm-protocol` | [crates/llm-protocol/CLAUDE.md](crates/llm-protocol/CLAUDE.md) |
+| `llm-anthropic` | [crates/llm-anthropic/CLAUDE.md](crates/llm-anthropic/CLAUDE.md) |
+| `llm-openai` | [crates/llm-openai/CLAUDE.md](crates/llm-openai/CLAUDE.md) |
+| `server` | [crates/server/CLAUDE.md](crates/server/CLAUDE.md) |
 
-## 代码规范
+## 跨 crate 规范
 
 - **语言**：Rust 2021 edition
 - **异步运行时**：tokio
@@ -60,7 +63,7 @@ lattice                 # 通过 feature flags 重导出所有子 crate
 - **语言约定**：文档用中文，代码注释全部用英文（包括 `///` doc comment 和 `//` 行内注释）
 - **测试**：每个 crate 必须有单元测试，trait 实现必须有集成测试
 - **commit 信息**：`<type>(<scope>): <description>`，如 `feat(core): define SessionStore trait`
-- **模块文件**：使用 `foo.rs` 而非 `foo/mod.rs`；子模块文件与父模块同级存放（如 `api.rs` + `api/sessions.rs` + `api/types.rs`）
+- **模块文件**：使用 `foo.rs` 而非 `foo/mod.rs`；子模块文件与父模块同级存放
 
 ## 实现任务时的工作流
 
