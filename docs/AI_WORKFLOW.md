@@ -51,7 +51,7 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 要求：
 1. 按照 docs/ARCHITECTURE.md 中的 trait 定义实现
 2. 写单元测试和集成测试
-3. 确保 cargo test、cargo clippy 通过
+3. 运行 `./scripts/check.sh` 确保全部通过
 4. 完成后提交到 feat/<branch-name> 分支
 ```
 
@@ -59,10 +59,8 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 
 **由 CI 自动完成 + 人工审查**。
 
-- `cargo test` — 单元测试和集成测试
-- `cargo clippy` — lint 检查
-- `cargo fmt --check` — 格式检查
-- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` — 文档生成检查
+- `./scripts/check.sh` — fmt + clippy + test + doc 一键检查
+- `./scripts/test-local.sh` — 包含真实 LLM 集成测试（需要 `.env`）
 
 ### 阶段 5：AI Review（自动代码审查）
 

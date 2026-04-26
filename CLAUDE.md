@@ -67,9 +67,6 @@ lattice                 # 通过 feature flags 重导出所有子 crate
 1. 先读 `docs/ARCHITECTURE.md` 理解整体设计
 2. 确认要实现的组件在 `docs/ROADMAP.md` 路线图范围内
 3. 按架构文档中的 trait 定义编写代码
-4. 写测试，确保以下四项全部通过：
-   - `cargo fmt --all -- --check`
-   - `cargo clippy --all-targets --all-features -- -D warnings`
-   - `cargo test --all-targets --all-features`
-   - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`
-5. 提交时遵守 commit 信息规范
+4. 写测试，运行 `./scripts/check.sh` 确保 fmt + clippy + test + doc 全部通过
+5. 如有 `.env` 文件，运行 `./scripts/test-local.sh` 跑真实 LLM 集成测试
+6. 提交时遵守 commit 信息规范
