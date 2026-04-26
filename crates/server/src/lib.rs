@@ -3,6 +3,9 @@
 //! Exposes the Lattice agent framework as a REST API. Supports multiple LLM
 //! providers (Anthropic, OpenAI-compatible) controlled via feature flags.
 
+mod api;
+mod error;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -14,6 +17,9 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use crate::api::types::SessionMetadata;
+pub use crate::error::AppError;
+
 /// Global shared application state.
 pub struct AppState {
     /// Session store (currently MemoryStore, swappable via trait).
@@ -22,6 +28,19 @@ pub struct AppState {
     pub active_runs: Arc<RwLock<HashMap<SessionId, RunHandle>>>,
     /// Server start time (for uptime reporting).
     pub started_at: DateTime<Utc>,
+    /// Index of all known sessions (for listing).
+    pub sessions: Arc<RwLock<Vec<SessionInfo>>>,
+}
+
+/// Metadata for a tracked session.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    /// Unique session identifier.
+    pub session_id: SessionId,
+    /// When the session was created.
+    pub created_at: DateTime<Utc>,
+    /// Optional user-supplied metadata.
+    pub metadata: Option<SessionMetadata>,
 }
 
 /// Handle for an in-flight agent run.
@@ -87,8 +106,7 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        // Future tasks will add:
-        // .nest("/v1", v1_routes())
+        .nest("/v1", crate::api::v1_routes())
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()
@@ -105,6 +123,7 @@ pub fn new_state(store: Arc<dyn lattice_core::SessionStore>) -> AppState {
         store,
         active_runs: Arc::new(RwLock::new(HashMap::new())),
         started_at: Utc::now(),
+        sessions: Arc::new(RwLock::new(Vec::new())),
     }
 }
 
@@ -179,5 +198,332 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_201() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["sessionId"].is_string());
+        assert_eq!(json["status"], "created");
+        assert_eq!(json["eventCount"], 1);
+    }
+
+    #[tokio::test]
+    async fn create_session_with_metadata() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"metadata":{"name":"test","tags":["a","b"]}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn list_sessions_contains_created() {
+        let app = make_app();
+
+        // Create a session first.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // List sessions.
+        let list_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(list_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let sessions: Vec<&str> = list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["sessionId"].as_str().unwrap())
+            .collect();
+        assert!(sessions.contains(&session_id));
+    }
+
+    #[tokio::test]
+    async fn list_sessions_empty_returns_empty_array() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["sessions"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_session_returns_correct_details() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Get details.
+        let get_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(get_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(detail["sessionId"], session_id);
+        assert_eq!(detail["status"], "created");
+        assert_eq!(detail["eventCount"], 1);
+        assert!(detail["latestEventId"].is_string());
+    }
+
+    #[tokio::test]
+    async fn get_session_not_found_returns_404() {
+        let app = make_app();
+        let fake_id = "00000000-0000-0000-0000-000000000000";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{fake_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "session_not_found");
+    }
+
+    #[tokio::test]
+    async fn get_events_returns_session_created() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Get events.
+        let events_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}/events"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(events_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(events_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(evts["events"].as_array().unwrap().len(), 1);
+        assert_eq!(evts["events"][0]["payload"]["type"], "sessionCreated");
+        assert_eq!(evts["hasMore"], false);
+    }
+
+    #[tokio::test]
+    async fn get_events_not_found_returns_404() {
+        let app = make_app();
+        let fake_id = "00000000-0000-0000-0000-000000000000";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{fake_id}/events"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_events_with_limit() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Events with limit=0 should return 0 events but hasMore indicates more.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}/events?limit=0"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_events_with_actor_filter() {
+        let app = make_app();
+
+        // Create.
+        let create_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(create_resp.into_body(), 1024)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["sessionId"].as_str().unwrap();
+
+        // Filter by actor=System (should return SessionCreated).
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}/events?actor=System"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(evts["events"].as_array().unwrap().len(), 1);
+
+        // Filter by actor=LLM (should return 0 — SessionCreated is System).
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{session_id}/events?actor=LLM"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(evts["events"].as_array().unwrap().is_empty());
     }
 }

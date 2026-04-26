@@ -57,6 +57,7 @@ lattice                 # 通过 feature flags 重导出所有子 crate
 - **语言约定**：文档用中文，代码注释全部用英文（包括 `///` doc comment 和 `//` 行内注释）
 - **测试**：每个 crate 必须有单元测试，trait 实现必须有集成测试
 - **commit 信息**：`<type>(<scope>): <description>`，如 `feat(core): define SessionStore trait`
+- **模块文件**：使用 `foo.rs` 而非 `foo/mod.rs`；子模块文件与父模块同级存放（如 `api.rs` + `api/sessions.rs` + `api/types.rs`）
 
 ## 实现任务时的工作流
 
