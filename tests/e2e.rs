@@ -24,12 +24,10 @@ use std::sync::Arc;
 async fn test_end_to_end_agent_run() {
     dotenvy::dotenv().ok();
 
-    let api_key =
-        std::env::var("LATTICE_API_KEY").expect("LATTICE_API_KEY not set in .env");
+    let api_key = std::env::var("LATTICE_API_KEY").expect("LATTICE_API_KEY not set in .env");
     let api_base = std::env::var("LATTICE_API_BASE")
         .unwrap_or_else(|_| "https://api.minimax.chat/v1".to_string());
-    let model =
-        std::env::var("LATTICE_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".into());
+    let model = std::env::var("LATTICE_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".into());
 
     let llm: Arc<dyn LLMClient> =
         Arc::new(OpenAIClient::new(&api_key, &model).with_base_url(&api_base));
@@ -54,11 +52,9 @@ async fn test_end_to_end_agent_run() {
         .unwrap();
 
     let system_prompt =
-        "You are a helpful agent. When asked to run a bash command, use the bash tool."
-            .to_string();
+        "You are a helpful agent. When asked to run a bash command, use the bash tool.".to_string();
 
-    let control_loop =
-        ControlLoop::with_options(store.clone(), llm, tools, system_prompt, 10);
+    let control_loop = ControlLoop::with_options(store.clone(), llm, tools, system_prompt, 10);
 
     let result = control_loop.run(session_id).await;
 
