@@ -9,7 +9,7 @@
 | 3   | [实现 core 类型和 trait](03-core-traits.md)            | `feat/core-traits`    | ✅    |
 | 4   | [实现 MemoryStore](04-store-memory.md)                 | `feat/store-memory`   | ✅    |
 | 5   | [实现 LocalSandbox](05-sandbox-local.md)               | `feat/sandbox-local`  | ✅    |
-| 6   | [实现 ControlLoop + BasicSandboxRouter](06-runtime.md) | `feat/runtime`        | ✅    |
+| 6   | [实现 ControlLoop](06-runtime.md)                      | `feat/runtime`        | ✅    |
 | 7   | [实现 hello-agent example](07-hello-agent.md)          | `feat/hello-agent`    | ✅    |
 
 ## 第二轮：真实 LLM 接入 ✅
@@ -35,10 +35,11 @@
 | 12  | [Facade crate + Feature Flags](12-facade-features.md) | `feat/facade-features` | ✅    |
 | 13  | [Server crate 骨架 + 基础路由](13-server-skeleton.md) | `feat/server-skeleton` | ✅    |
 | 14  | [会话管理 API](14-session-api.md)                     | `feat/session-api`     | ✅    |
-| 15  | [任务提交与 Agent 执行 API](15-agent-run-api.md)      | `feat/agent-run-api`   | ⬜    |
-| 16  | [SSE 实时事件流](16-sse-stream.md)                    | `feat/sse-stream`      | ⬜    |
-| 17  | [配置管理与多 Provider 支持](17-config-provider.md)   | `feat/config-provider` | ⬜    |
-| 18  | [Docker 化独立部署](18-docker-deploy.md)              | `feat/docker-deploy`   | ⬜    |
+| 15  | [工具系统：ToolExecutor + ToolSet + 标准工具库](15-tool-system.md) | `feat/tool-system` | ⬜ |
+| 16  | [任务提交与 Agent 执行 API](16-agent-run-api.md)      | `feat/agent-run-api`   | ⬜    |
+| 17  | [SSE 实时事件流](17-sse-stream.md)                    | `feat/sse-stream`      | ⬜    |
+| 18  | [配置管理与多 Provider 支持](18-config-provider.md)   | `feat/config-provider` | ⬜    |
+| 19  | [Docker 化独立部署](19-docker-deploy.md)              | `feat/docker-deploy`   | ⬜    |
 
 ## 后续规划（待拆解）
 

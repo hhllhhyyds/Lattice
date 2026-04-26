@@ -400,3 +400,225 @@ pub fn register_providers(registry: &mut ProviderRegistry, config: &[ProviderCon
     }
 }
 ```
+
+## 工具系统
+
+### 设计背景
+
+参考 Anthropic Managed Agents 的设计，工具（tool）的核心接口是 `execute(name, input) → output`。Brain（ControlLoop）不关心工具背后是一个沙箱容器、一个进程内函数、还是一个远程 MCP 服务器——只关心 name + input 进去，output 出来。
+
+Lattice 在此基础上做了一个重要的分层：将「工具描述」（给 LLM 看的元数据）与「工具执行」（实际运行逻辑）分离。一个 Sandbox 可以支持多个工具（如 LocalSandbox 同时支持 bash 和 python），一个工具也可以不需要 Sandbox（如 file_read 在进程内直接执行）。
+
+### 三层工具体系
+
+```
+┌─────────────────────────────────────────┐
+│  Layer 3: Harness-Provided Tools        │  ← 应用层注入
+│  (MCP servers, custom business tools)   │
+├─────────────────────────────────────────┤
+│  Layer 2: Standard Tool Library         │  ← 框架提供，可选启用
+│  (bash, file_read, file_write, glob,    │
+│   grep, http...)                        │
+├─────────────────────────────────────────┤
+│  Layer 1: Tool Infrastructure           │  ← core 层，纯接口
+│  (ToolDescription, ToolExecutor trait,  │
+│   ToolSet)                              │
+└─────────────────────────────────────────┘
+```
+
+**Layer 1：Tool Infrastructure（`lattice-core`）**
+
+纯接口定义，零实现。包括已有的 `ToolDescription` 和新增的 `ToolExecutor` trait。
+
+**Layer 2：Standard Tool Library（`lattice-tools`）**
+
+框架自带的常用工具实现。每个工具是独立的 struct，实现 `ToolExecutor`。通过 feature flags 按需编译，默认只包含 bash。
+
+**Layer 3：Harness-Provided Tools（应用层）**
+
+框架消费者自行注册的工具——MCP 桥接、业务专用工具等。通过相同的 `ToolExecutor` trait 和 `ToolSet::add()` 接口注入，与内置工具同等公民。
+
+### 核心接口
+
+#### ToolExecutor trait（`lattice-core`）
+
+```rust
+/// A tool that can be executed by the agent.
+///
+/// Implementations can be in-process (file read, HTTP fetch) or delegate
+/// to a Sandbox (bash, python). The ControlLoop does not distinguish
+/// between the two — it only calls `execute()`.
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    /// Return the tool description for LLM consumption.
+    fn description(&self) -> ToolDescription;
+
+    /// Execute the tool with the given parameters.
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError>;
+}
+```
+
+#### ToolSet（`lattice-tools`）
+
+```rust
+/// A collection of tools available to the agent.
+///
+/// ToolSet serves two roles:
+/// 1. Provide tool descriptions to the LLM (via `descriptions()`)
+/// 2. Route tool calls to the correct executor (via `execute()`)
+///
+/// This replaces the previous pattern of separate `Vec<ToolDescription>` +
+/// `SandboxRouter` with a unified abstraction.
+pub struct ToolSet {
+    tools: HashMap<String, Box<dyn ToolExecutor>>,
+}
+
+impl ToolSet {
+    pub fn new() -> Self { ... }
+
+    /// Build a ToolSet with all default tools enabled by feature flags.
+    pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self {
+        let mut set = Self::new();
+        #[cfg(feature = "bash")]
+        set.add(BashTool::new(sandbox));
+        #[cfg(feature = "file")]
+        {
+            set.add(FileReadTool::new());
+            set.add(FileWriteTool::new());
+            set.add(GlobTool::new());
+            set.add(GrepTool::new());
+        }
+        set
+    }
+
+    /// Register a tool. Panics if a tool with the same name already exists.
+    pub fn add(&mut self, tool: impl ToolExecutor + 'static) { ... }
+
+    /// List all tool descriptions (passed to LLMClient::decide).
+    pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
+
+    /// Look up and execute a tool by name.
+    pub async fn execute(
+        &self,
+        name: &str,
+        params: serde_json::Value,
+    ) -> Result<ExecutionResult, SandboxError> { ... }
+}
+```
+
+### 两类工具执行模式
+
+工具按执行方式分为两类，但对 ControlLoop 来说完全透明：
+
+**沙箱工具（Sandbox-backed）**：需要隔离执行环境的工具。`ToolExecutor::execute()` 内部持有 `Arc<dyn Sandbox>` 引用，委托给沙箱执行。
+
+```rust
+/// Bash tool — delegates to a Sandbox for isolated execution.
+pub struct BashTool {
+    sandbox: Arc<dyn Sandbox>,
+}
+
+#[async_trait]
+impl ToolExecutor for BashTool {
+    fn description(&self) -> ToolDescription { /* bash tool schema */ }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError> {
+        let command = params["command"].as_str().ok_or(/* ... */)?;
+        self.sandbox.execute("bash", serde_json::json!({ "command": command })).await
+    }
+}
+```
+
+**进程内工具（In-process）**：不需要沙箱的轻量工具，直接在框架进程内执行。
+
+```rust
+/// File read tool — reads files in-process, no sandbox needed.
+pub struct FileReadTool { /* optional: allowed paths, size limits */ }
+
+#[async_trait]
+impl ToolExecutor for FileReadTool {
+    fn description(&self) -> ToolDescription { /* file_read tool schema */ }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError> {
+        let path = params["path"].as_str().ok_or(/* ... */)?;
+        let content = tokio::fs::read_to_string(path).await?;
+        Ok(ExecutionResult { stdout: content, stderr: String::new(), exit_code: 0 })
+    }
+}
+```
+
+### ToolSet 与 SandboxRouter 的关系
+
+`ToolSet` 统一了工具描述和工具执行两个职责，取代了之前 `Vec<ToolDescription>` + `SandboxRouter` 的分离模式。
+
+引入 ToolSet 后，`SandboxRouter` trait 和 `BasicSandboxRouter` 将被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 改为接收 `ToolSet`：
+
+```rust
+// Before:
+let control_loop = ControlLoop::with_options(store, llm, router, tools, prompt, max_iter);
+
+// After:
+let tools = ToolSet::with_defaults(sandbox)
+    .add(MyCustomTool::new());
+
+let control_loop = ControlLoop::builder()
+    .store(store)
+    .llm(llm)
+    .tools(tools)
+    .system_prompt("You are a helpful agent.")
+    .build();
+```
+
+### Crate 结构
+
+```
+crates/
+├── core/           # ToolDescription（已有）+ ToolExecutor trait（新增）
+├── tools/          # lattice-tools: 标准工具库（新 crate）
+│   ├── bash.rs     #   BashTool（沙箱工具）
+│   ├── file.rs     #   FileReadTool, FileWriteTool（进程内工具）
+│   ├── glob.rs     #   GlobTool（进程内工具）
+│   ├── grep.rs     #   GrepTool（进程内工具）
+│   └── http.rs     #   HttpTool（进程内工具，可选 reqwest）
+├── runtime/        # ControlLoop 改为接收 ToolSet
+└── server/         # 构建 ToolSet::with_defaults() 传入 ControlLoop
+```
+
+#### Feature Flags
+
+```toml
+# crates/tools/Cargo.toml
+[package]
+name = "lattice-tools"
+
+[features]
+default = ["bash"]
+bash = ["dep:lattice-sandbox-local"]
+file = []
+glob = ["dep:glob"]
+grep = ["dep:grep"]
+http = ["dep:reqwest"]
+full = ["bash", "file", "glob", "grep", "http"]
+
+[dependencies]
+lattice-core = { path = "../core" }
+lattice-sandbox-local = { path = "../sandbox-local", optional = true }
+# ...
+```
+
+Facade crate 同步更新：
+
+```toml
+# 根 Cargo.toml (lattice facade)
+[features]
+tools = ["dep:lattice-tools"]
+tools-full = ["tools", "lattice-tools/full"]
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools-full"]
+```
+
+### 未来扩展
+
+- **MCP 桥接工具**：实现 `ToolExecutor`，内部通过 MCP 协议调用外部 MCP 服务器。作为 Layer 3 工具由应用层注入。
+- **沙箱工厂（SandboxFactory）**：当工具需要按需创建沙箱时（如 Docker 容器），引入 factory 模式，实现 Anthropic 提出的 `provision({resources})` 语义。
+- **凭据隔离**：参考 Anthropic 的两种模式——资源绑定（token 注入沙箱初始化）和 Vault Proxy（工具通过代理访问凭据）。框架层面预留接口，不在工具实现中硬编码凭据处理。
+- **工具权限控制**：参考 Claude Code 的 permission 模型，支持按工具名配置 allow/deny 规则。

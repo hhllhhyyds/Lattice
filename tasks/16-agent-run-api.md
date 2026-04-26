@@ -1,4 +1,4 @@
-# 任务 15：任务提交与 Agent 执行 API
+# 任务 16：任务提交与 Agent 执行 API
 
 > ⚠️ **STATUS: DRAFT — 未经人工 review，内容可能调整。**
 
@@ -13,6 +13,7 @@
 ## 依赖
 
 - 任务 14（会话管理 API）
+- 任务 15（工具系统 — ToolSet 提供工具注册和执行）
 - 任务 8-10（LLM 后端，至少一个可用）
 - 任务 12（facade crate — feature flags 控制 provider 编译）
 
@@ -115,13 +116,12 @@ async fn start_agent_run(
     }
 
     let store = state.store.clone();
-    let tools = default_tool_descriptions();  // bash 工具描述
+    let sandbox = Arc::new(LocalSandbox::new());
+    let tools = Arc::new(ToolSet::with_defaults(sandbox));
 
     let join_handle = tokio::spawn(async move {
-        let sandbox = LocalSandbox::new();
-        let router = BasicSandboxRouter::new(store.clone(), sandbox);
-        let control_loop = ControlLoop::new(store, llm_client, router);
-        control_loop.run(session_id, &system_prompt, &tools).await
+        let control_loop = ControlLoop::new(store, llm_client, tools);
+        control_loop.run(session_id).await
     });
 
     // 注册 RunHandle
@@ -137,26 +137,7 @@ async fn start_agent_run(
 
 ### 3. 默认工具注册
 
-提供 bash 工具描述（与 real-agent example 一致）：
-
-```rust
-fn default_tool_descriptions() -> Vec<ToolDescription> {
-    vec![ToolDescription {
-        name: "bash".to_string(),
-        description: "Execute a bash command...".to_string(),
-        parameters_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The bash command to execute"
-                }
-            },
-            "required": ["command"]
-        }),
-    }]
-}
-```
+通过 `ToolSet::with_defaults()` 自动注册所有按 feature 启用的工具（见任务 15）。不再需要手动构建 `Vec<ToolDescription>`。
 
 ### 4. LLM Provider 工厂
 

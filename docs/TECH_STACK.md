@@ -41,14 +41,14 @@
 
 ### thiserror + anyhow
 
-- **thiserror**：在 core crate 中为每个 trait 定义精确的错误类型（`StoreError`、`LLMError`、`SandboxError`、`RouterError`）
+- **thiserror**：在 core crate 中为每个 trait 定义精确的错误类型（`StoreError`、`LLMError`、`SandboxError`、`ToolError`）
 - **anyhow**：在 runtime 和 example 中做顶层错误聚合
 - 分层清晰：trait 消费者看到精确错误，应用层简化处理
 
 ### mockall
 
 - 所有核心组件都是 trait，mockall 可以自动生成 mock 实现
-- 测试 ControlLoop 时可以 mock SessionStore、LLMClient、SandboxRouter
+- 测试 ControlLoop 时可以 mock SessionStore、LLMClient、ToolSet
 - 无需启动真实 LLM 或沙箱即可跑完整控制循环测试
 
 ## 依赖版本策略
