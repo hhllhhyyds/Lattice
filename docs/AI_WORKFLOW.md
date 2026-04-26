@@ -66,7 +66,8 @@ Lattice 项目全程使用 AI 辅助编程（Claude Code）。本文档定义了
 
 使用 `cargo-llvm-cov` 检测代码覆盖率。覆盖率报告作为 CI 的一部分运行，不阻断合并，但作为参考指标。
 
-- **生成报告**：`cargo llvm-cov report --lcov --output-path lcov.info` 生成 LCOV 格式，供 CI 工具展示覆盖率趋势
+- **本地运行**：`./scripts/check.sh` 中的步骤 3 包含覆盖率检测（需要先 `cargo install cargo-llvm-cov`）
+- **CI 上传**：coverage job 通过 `cargo-llvm-cov-action` 上传至 Codecov（需要 `CODECOV_TOKEN` secret）
 - **指标**：按 crate 维度统计 line coverage 和 branch coverage
 - **目标**：非数值目标，保持覆盖率不下降为主要原则；新增代码应附带对应的测试
 
