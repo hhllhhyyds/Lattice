@@ -1,5 +1,7 @@
 # Lattice
 
+[![codecov](https://codecov.io/gh/hhllhhyyds/lattice/branch/main/graph/badge.svg)](https://codecov.io/gh/hhllhhyyds/lattice)
+
 **Agent 元框架** — 将 AI Agent 的"大脑"与"双手"彻底解耦。
 
 ## 什么是 Lattice？
