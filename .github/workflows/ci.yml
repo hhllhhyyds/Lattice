@@ -73,7 +73,6 @@ jobs:
 
       - name: Coverage
         run: |
-          cargo llvm-cov test --workspace --all-features --save-cache -- --nocapture
-          cargo llvm-cov report --lcov --output-path lcov.info --load-cache
+          cargo llvm-cov test --workspace --all-features --lcov --output-path lcov.info -- --nocapture
           curl -Os https://cli.codecov.io/latest/linux/codecov && chmod +x codecov
           ./codecov upload-file --file lcov.info
