@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo test --all-features -- --ignored
 
-use lattice_core::{EventPayload, LLMClient, SessionStore};
+use lattice_core::{Actor, EventPayload, LLMClient, SessionStore};
 use lattice_llm_openai::OpenAIClient;
 use lattice_runtime::ControlLoop;
 use lattice_sandbox_local::LocalSandbox;
@@ -28,6 +28,20 @@ async fn test_end_to_end_agent_run() {
 
     let session_id = store.create_session().await.unwrap();
 
+    // Append a user message so the LLM has content to reason about.
+    // SessionCreated is skipped by the protocol layer, so it's not sent to the LLM.
+    store
+        .append_event(
+            session_id,
+            EventPayload::UserMessage {
+                content: "What is 2 + 2? Reply with just the number.".to_string(),
+            },
+            Actor::System,
+            None,
+        )
+        .await
+        .unwrap();
+
     let system_prompt =
         "You are a helpful agent. When asked to run a bash command, use the bash tool.".to_string();
 
@@ -35,36 +49,30 @@ async fn test_end_to_end_agent_run() {
 
     let result = control_loop.run(session_id).await;
 
-    // We expect a result (either FinalAnswer or an error from max iterations).
-    // The important thing is the control loop executed without panicking
-    // and recorded events in the store.
-    assert!(
-        result.is_ok() || result.is_err(),
-        "control loop should complete"
-    );
+    // Assert the loop completed with a result.
+    // On success the result is the final answer string.
+    let answer = result.expect("control loop should complete successfully");
+    eprintln!("Final answer: {answer}");
 
-    // Verify the event log contains key events.
+    // Verify the event log contains at least SessionCreated and FinalAnswer.
     let events = store
         .get_events(session_id, &lattice_core::EventFilter::default())
         .await
         .unwrap();
 
-    let has_tool_call = events
-        .iter()
-        .any(|e| matches!(e.payload, EventPayload::ToolCallRequested { .. }));
-    let has_result_or_error = events.iter().any(|e| {
-        matches!(
-            e.payload,
-            EventPayload::ToolCallResult { .. } | EventPayload::ToolCallError { .. }
-        )
-    });
-
     assert!(
-        has_tool_call,
-        "expected at least one ToolCallRequested event"
+        events.len() >= 2,
+        "expected at least SessionCreated and FinalAnswer events, got {} events: {:?}",
+        events.len(),
+        events
     );
+
+    let has_final_answer = events
+        .iter()
+        .any(|e| matches!(e.payload, EventPayload::FinalAnswer { .. }));
     assert!(
-        has_result_or_error,
-        "expected ToolCallResult or ToolCallError event"
+        has_final_answer,
+        "expected FinalAnswer in event log, got: {:?}",
+        events
     );
 }

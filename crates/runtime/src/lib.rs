@@ -10,15 +10,18 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use lattice_tools::ToolSet;
+//! ```text
+//! // Create components (using your implementations):
+//! let store: Arc<dyn SessionStore> = ...;
+//! let llm: Arc<dyn LLMClient> = ...;
+//! let sandbox: Arc<dyn Sandbox> = ...;
 //!
-//! let store = Arc::new(MemoryStore::new());
-//! let sandbox = Arc::new(LocalSandbox::new());
-//! let llm = Arc::new(my_llm_client);
+//! // Build tool set and control loop
 //! let tools = Arc::new(ToolSet::with_defaults(sandbox));
 //! let control_loop = ControlLoop::new(store, llm, tools);
-//! control_loop.run(session_id).await?;
+//!
+//! // Run the agent
+//! let answer = control_loop.run(session_id).await?;
 //! ```
 
 mod control_loop;
