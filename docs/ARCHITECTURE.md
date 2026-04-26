@@ -196,14 +196,6 @@ pub enum Decision {
     ToolCall { tool: String, params: serde_json::Value },
     FinalAnswer { answer: String },
 }
-
-/// 工具描述（注入给 LLM）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDescription {
-    pub name: String,
-    pub description: String,
-    pub parameters_schema: serde_json::Value,
-}
 ```
 
 ### 3. Sandbox（沙箱）—— Agent 的双手
@@ -468,15 +460,15 @@ Lattice 在此基础上做了一个重要的分层：将「工具描述」（给
 /// A tool that can be executed by the agent.
 ///
 /// Implementations can be in-process (file read, HTTP fetch) or delegate
-/// to a Sandbox (bash, python). The ControlLoop does not distinguish
-/// between the two — it only calls `execute()`.
+/// to a Sandbox (bash, python). The ControlLoop treats all tools identically
+/// through this trait.
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     /// Return the tool description for LLM consumption.
     fn description(&self) -> ToolDescription;
 
     /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, SandboxError>;
+    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError>;
 }
 ```
 
@@ -488,9 +480,6 @@ pub trait ToolExecutor: Send + Sync {
 /// ToolSet serves two roles:
 /// 1. Provide tool descriptions to the LLM (via `descriptions()`)
 /// 2. Route tool calls to the correct executor (via `execute()`)
-///
-/// This replaces the previous pattern of separate `Vec<ToolDescription>` +
-/// `SandboxRouter` with a unified abstraction.
 pub struct ToolSet {
     tools: HashMap<String, Box<dyn ToolExecutor>>,
 }
@@ -499,22 +488,16 @@ impl ToolSet {
     pub fn new() -> Self { ... }
 
     /// Build a ToolSet with all default tools enabled by feature flags.
+    /// Currently includes BashTool (if the `bash` feature is enabled).
+    #[cfg(feature = "bash")]
     pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self {
         let mut set = Self::new();
-        #[cfg(feature = "bash")]
-        set.add(BashTool::new(sandbox));
-        #[cfg(feature = "file")]
-        {
-            set.add(FileReadTool::new());
-            set.add(FileWriteTool::new());
-            set.add(GlobTool::new());
-            set.add(GrepTool::new());
-        }
+        set.register(BashTool::new(sandbox)).unwrap();
         set
     }
 
-    /// Register a tool. Panics if a tool with the same name already exists.
-    pub fn add(&mut self, tool: impl ToolExecutor + 'static) { ... }
+    /// Register a tool. Returns error if a tool with the same name already exists.
+    pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> { ... }
 
     /// List all tool descriptions (passed to LLMClient::decide).
     pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
@@ -524,7 +507,7 @@ impl ToolSet {
         &self,
         name: &str,
         params: serde_json::Value,
-    ) -> Result<ExecutionResult, SandboxError> { ... }
+    ) -> Result<ExecutionResult, ToolError> { ... }
 }
 ```
 
@@ -545,13 +528,16 @@ impl ToolExecutor for BashTool {
     fn description(&self) -> ToolDescription { /* bash tool schema */ }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
-        let command = params["command"].as_str().ok_or(ToolError::InvalidParams(
-            "missing 'command' field".to_string(),
-        ))?;
+        let command = params
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams(
+                "missing or invalid 'command' field (expected string)".to_string(),
+            ))?;
         self.sandbox
             .execute(command, params.clone())
             .await
-            .map_err(ToolError::ExecutionFailed)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
     }
 }
 ```
@@ -583,6 +569,8 @@ impl ToolExecutor for FileReadTool {
 }
 ```
 
+> **注意**：FileReadTool 及其他进程内工具（glob、grep、http）尚未实现，此处为设计示例。目前已实现的标准工具仅有 BashTool。
+
 ### ToolSet 与 SandboxRouter 的关系
 
 `ToolSet` 统一了工具描述和工具执行两个职责，取代了之前的 `Vec<ToolDescription>` + `SandboxRouter` 分离模式。
@@ -596,6 +584,11 @@ let control_loop = ControlLoop::with_options(store, llm, router, vec![], prompt,
 // After:
 let tools = Arc::new(ToolSet::with_defaults(sandbox));
 let control_loop = ControlLoop::new(store, llm, tools);
+
+// Register custom tools:
+let mut tools = ToolSet::with_defaults(sandbox);
+tools.register(MyCustomTool::new()).unwrap();
+let control_loop = ControlLoop::new(store, llm, Arc::new(tools));
 ```
 
 ### 测试覆盖率
@@ -611,15 +604,17 @@ let control_loop = ControlLoop::new(store, llm, tools);
 
 ```
 crates/
-├── core/           # ToolDescription（已有）+ ToolExecutor trait（新增）
-├── tools/          # lattice-tools: 标准工具库（新 crate）
-│   ├── bash.rs     #   BashTool（沙箱工具）
-│   ├── file.rs     #   FileReadTool, FileWriteTool（进程内工具）
-│   ├── glob.rs     #   GlobTool（进程内工具）
-│   ├── grep.rs     #   GrepTool（进程内工具）
-│   └── http.rs     #   HttpTool（进程内工具，可选 reqwest）
-├── runtime/        # ControlLoop 改为接收 ToolSet
-└── server/         # 构建 ToolSet::with_defaults() 传入 ControlLoop
+├── core/           # SessionStore, LLMClient, Sandbox, ToolExecutor traits + core types
+├── tools/          # lattice-tools: 标准工具库
+│   ├── set.rs      #   ToolSet 注册表
+│   └── bash.rs     #   BashTool（沙箱工具）
+├── runtime/        # ControlLoop（接收 Arc<ToolSet>）
+├── store-memory/   # SessionStore 内存实现
+├── sandbox-local/  # Sandbox 本地子进程实现
+├── llm-protocol/   # LLM 通用协议层（消息格式转换、响应解析）
+├── llm-anthropic/  # Anthropic Claude 后端
+├── llm-openai/     # OpenAI 兼容后端
+└── server/         # HTTP API 服务（axum）
 ```
 
 #### Feature Flags
@@ -631,17 +626,11 @@ name = "lattice-tools"
 
 [features]
 default = ["bash"]
-bash = ["dep:lattice-sandbox-local"]
-file = []
-glob = ["dep:glob"]
-grep = ["dep:grep"]
-http = ["dep:reqwest"]
-full = ["bash", "file", "glob", "grep", "http"]
+bash = ["lattice-sandbox-local"]
 
 [dependencies]
 lattice-core = { path = "../core" }
 lattice-sandbox-local = { path = "../sandbox-local", optional = true }
-# ...
 ```
 
 Facade crate 同步更新：
@@ -649,9 +638,9 @@ Facade crate 同步更新：
 ```toml
 # 根 Cargo.toml (lattice facade)
 [features]
+default = ["runtime", "store-memory", "sandbox-local", "tools"]
 tools = ["dep:lattice-tools"]
-tools-full = ["tools", "lattice-tools/full"]
-full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools-full"]
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
 ```
 
 ### 未来扩展
