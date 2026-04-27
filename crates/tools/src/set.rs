@@ -34,10 +34,10 @@ impl ToolSet {
     ///
     /// Currently includes:
     /// - `BashTool` (if the `bash` feature is enabled)
-    #[cfg(feature = "bash")]
     #[must_use]
     pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self {
         let mut set = Self::new();
+        #[cfg(feature = "bash")]
         set.register(crate::bash::BashTool::new(sandbox))
             .expect("bash tool registration should not fail");
         set
