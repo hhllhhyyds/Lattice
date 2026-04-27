@@ -213,7 +213,7 @@ mod tests {
         // Verify it's valid UTF-8 and doesn't panic
         assert!(result.chars().count() > 0);
         // Verify the truncation happened at a character boundary (no panic = success)
-        assert!(result.len() > 0 && result.len() < long_input.len());
+        assert!(!result.is_empty() && result.len() < long_input.len());
     }
 
     #[test]
