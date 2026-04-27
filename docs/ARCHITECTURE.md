@@ -214,6 +214,9 @@ pub struct ToolDescription {
 - **隔离**：沙箱内的代码无法访问框架内部或凭据
 - **可替换**：崩溃了换一个新的，ControlLoop 视之为一次工具调用失败
 - **按需启动**：只在 LLM 真正需要执行工具时才创建
+- **跨平台**：LocalSandbox 根据操作系统自动选择合适的 shell
+  - Unix/Linux/macOS: `sh -c`
+  - Windows: `cmd.exe /C`
 
 **Sandbox trait**：
 
