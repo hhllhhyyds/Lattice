@@ -206,7 +206,8 @@ mod tests {
         assert_eq!(result, input);
 
         // Long Chinese string that will be truncated
-        let long_input = "以下是当前目录下的文件列表：文件1、文件2、文件3、文件4、文件5、文件6、文件7、文件8";
+        let long_input =
+            "以下是当前目录下的文件列表：文件1、文件2、文件3、文件4、文件5、文件6、文件7、文件8";
         let result = truncate(long_input, 50);
         assert!(result.ends_with("..."));
         // Verify it's valid UTF-8 and doesn't panic

@@ -264,7 +264,10 @@ mod tests {
         assert!(set.contains("sh"), "ToolSet should contain 'sh' on Unix");
 
         #[cfg(windows)]
-        assert!(set.contains("cmd"), "ToolSet should contain 'cmd' on Windows");
+        assert!(
+            set.contains("cmd"),
+            "ToolSet should contain 'cmd' on Windows"
+        );
 
         assert_eq!(set.len(), 1);
     }
