@@ -288,12 +288,23 @@ mod tests {
 
     /// Manual test double for LLMClient.
     struct TestLLM {
-        decision: Decision,
+        decisions: Arc<Mutex<Vec<Decision>>>,
+        current_index: Arc<Mutex<usize>>,
     }
 
     impl TestLLM {
         fn new(decision: Decision) -> Self {
-            Self { decision }
+            Self {
+                decisions: Arc::new(Mutex::new(vec![decision])),
+                current_index: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        fn with_sequence(decisions: Vec<Decision>) -> Self {
+            Self {
+                decisions: Arc::new(Mutex::new(decisions)),
+                current_index: Arc::new(Mutex::new(0)),
+            }
         }
     }
 
@@ -305,7 +316,14 @@ mod tests {
             _available_tools: &[ToolDescription],
             _system_prompt: &str,
         ) -> Result<Decision, LLMError> {
-            Ok(self.decision.clone())
+            let mut index = self.current_index.lock().unwrap();
+            let decisions = self.decisions.lock().unwrap();
+            let decision = decisions
+                .get(*index)
+                .cloned()
+                .unwrap_or_else(|| decisions.last().unwrap().clone());
+            *index += 1;
+            Ok(decision)
         }
     }
 
@@ -690,5 +708,119 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("session not found"));
+    }
+
+    /// Test that get_events is only called once per run (performance optimization).
+    ///
+    /// This test verifies the fix for Issue #26: ControlLoop should fetch events
+    /// once at the start and maintain a local cache, rather than re-fetching on
+    /// every iteration.
+    #[tokio::test]
+    async fn test_get_events_called_only_once() {
+        let session_id = SessionId::new_v4();
+
+        // Create a store that tracks get_events call count
+        struct CallCountingStore {
+            inner: Arc<TestStore>,
+            get_events_call_count: Arc<Mutex<usize>>,
+        }
+
+        impl CallCountingStore {
+            fn with_session(session_id: SessionId) -> Self {
+                let store = TestStore::new();
+                store.insert_session(
+                    session_id,
+                    vec![Event {
+                        event_id: lattice_core::EventId::new_v4(),
+                        session_id,
+                        timestamp: chrono::Utc::now(),
+                        actor: Actor::System,
+                        payload: EventPayload::UserMessage {
+                            content: "test".into(),
+                        },
+                        parent_event_id: None,
+                    }],
+                );
+                Self {
+                    inner: Arc::new(store),
+                    get_events_call_count: Arc::new(Mutex::new(0)),
+                }
+            }
+
+            fn get_call_count(&self) -> usize {
+                *self.get_events_call_count.lock().unwrap()
+            }
+        }
+
+        #[async_trait]
+        impl lattice_core::SessionStore for CallCountingStore {
+            async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
+                self.inner.create_session().await
+            }
+
+            async fn append_event(
+                &self,
+                session_id: SessionId,
+                payload: EventPayload,
+                actor: Actor,
+                parent_event_id: Option<lattice_core::EventId>,
+            ) -> Result<lattice_core::EventId, lattice_core::error::StoreError> {
+                self.inner
+                    .append_event(session_id, payload, actor, parent_event_id)
+                    .await
+            }
+
+            async fn get_events(
+                &self,
+                session_id: SessionId,
+                filter: &EventFilter,
+            ) -> Result<Vec<Event>, lattice_core::error::StoreError> {
+                // Increment call counter
+                *self.get_events_call_count.lock().unwrap() += 1;
+                self.inner.get_events(session_id, filter).await
+            }
+
+            async fn latest_event_id(
+                &self,
+                session_id: SessionId,
+            ) -> Result<Option<lattice_core::EventId>, lattice_core::error::StoreError> {
+                self.inner.latest_event_id(session_id).await
+            }
+        }
+
+        let store = Arc::new(CallCountingStore::with_session(session_id));
+
+        // LLM will return ToolCall twice, then FinalAnswer
+        // This creates 3 iterations, which would call get_events 3 times in the old code
+        let decisions = vec![
+            Decision::ToolCall {
+                tool: "test_tool".into(),
+                params: serde_json::json!({"command": "echo first"}),
+            },
+            Decision::ToolCall {
+                tool: "test_tool".into(),
+                params: serde_json::json!({"command": "echo second"}),
+            },
+            Decision::FinalAnswer {
+                answer: "done".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let control_loop =
+            crate::ControlLoop::with_options(store.clone(), llm, tools, "prompt".into(), 10);
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "done");
+
+        // Verify get_events was called only once
+        let call_count = store.get_call_count();
+        assert_eq!(
+            call_count, 1,
+            "get_events should be called only once, but was called {} times",
+            call_count
+        );
     }
 }
