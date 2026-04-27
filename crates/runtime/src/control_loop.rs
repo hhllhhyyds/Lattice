@@ -892,4 +892,48 @@ mod tests {
             call_count
         );
     }
+
+    /// Test that Thinking decision path is covered.
+    #[tokio::test]
+    async fn test_thinking_decision_coverage() {
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        // LLM returns Thinking, then FinalAnswer
+        let decisions = vec![
+            Decision::Thinking {
+                reasoning: "let me think".into(),
+            },
+            Decision::FinalAnswer {
+                answer: "done".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::new(store),
+            llm,
+            tools,
+            "prompt".into(),
+            10,
+        );
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "done");
+    }
 }
