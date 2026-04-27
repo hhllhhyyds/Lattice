@@ -444,6 +444,8 @@ Lattice 在此基础上做了一个重要的分层：将「工具描述」（给
 │  Layer 2: Standard Tool Library         │  ← 框架提供，可选启用
 │  (bash, file_read, file_write, glob,    │
 │   grep, http...)                        │
+│  - 平台感知：BashTool 根据 OS 提供      │
+│    不同的工具描述（sh/cmd）              │
 ├─────────────────────────────────────────┤
 │  Layer 1: Tool Infrastructure           │  ← core 层，纯接口
 │  (ToolDescription, ToolExecutor trait,  │
@@ -539,13 +541,21 @@ impl ToolSet {
 
 ```rust
 /// Bash tool — delegates to a Sandbox for isolated execution.
+/// Platform-aware: provides different tool descriptions based on OS.
 pub struct BashTool {
     sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait]
 impl ToolExecutor for BashTool {
-    fn description(&self) -> ToolDescription { /* bash tool schema */ }
+    fn description(&self) -> ToolDescription {
+        // Platform-specific: "sh" on Unix, "cmd" on Windows
+        #[cfg(unix)]
+        { /* Unix shell description with ls, cat, grep examples */ }
+        
+        #[cfg(windows)]
+        { /* Windows cmd description with dir, type, findstr examples */ }
+    }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
         let command = params["command"].as_str().ok_or(ToolError::InvalidParams(
@@ -558,6 +568,15 @@ impl ToolExecutor for BashTool {
     }
 }
 ```
+
+### 平台感知工具
+
+标准工具库中的某些工具（如 BashTool）是平台感知的，会根据编译目标平台提供不同的工具描述：
+
+- **Unix/Linux/macOS**：工具名为 `"sh"`，描述中包含 Unix 命令示例（ls, cat, grep, find）
+- **Windows**：工具名为 `"cmd"`，描述中包含 Windows 命令示例（dir, type, findstr, where）
+
+这确保 LLM 能够生成适合当前平台的命令。平台检测在编译时通过 `#[cfg(unix)]` 和 `#[cfg(windows)]` 完成，零运行时开销。
 
 **进程内工具（In-process）**：不需要沙箱的轻量工具，直接在框架进程内执行。
 
