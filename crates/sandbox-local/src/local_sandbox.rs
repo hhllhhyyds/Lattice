@@ -69,7 +69,9 @@ impl Sandbox for LocalSandbox {
     /// Execute a command in the sandbox.
     ///
     /// The `params` JSON must contain a `command` field with the shell command
-    /// to run. The command is wrapped in `sh -c`.
+    /// to run. The command is wrapped in the platform-specific shell:
+    /// - Unix/Linux/macOS: `sh -c`
+    /// - Windows: `cmd.exe /C`
     #[instrument(skip(self))]
     async fn execute(
         &self,
@@ -83,8 +85,20 @@ impl Sandbox for LocalSandbox {
                 SandboxError::ExecutionFailed("missing 'command' in params".to_string())
             })?;
 
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", cmd_str]);
+        // Platform-specific shell selection
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.args(["-c", cmd_str]);
+            c
+        };
+
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", cmd_str]);
+            c
+        };
 
         if let Some(ref dir) = self.work_dir {
             cmd.current_dir(dir);
