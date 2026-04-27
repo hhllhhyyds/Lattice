@@ -41,6 +41,7 @@ crates/
 ├── llm-anthropic/    # LLMClient 的 Anthropic Claude 实现
 ├── llm-openai/       # LLMClient 的 OpenAI 兼容实现
 ├── tools/            # 标准工具库（bash, file, glob, grep, http）
+├── skill/            # Skill 系统（SkillTool、SkillToolSet、SkillLoader）
 ├── server/           # HTTP API 服务（axum），平台服务入口
 
 # Facade crate（根目录 src/lib.rs）
@@ -53,6 +54,7 @@ lattice               # 通过 feature flags 重导出所有子 crate
 |-------|-----------|
 | `runtime` | [crates/runtime/CLAUDE.md](crates/runtime/CLAUDE.md) |
 | `tools` | [crates/tools/CLAUDE.md](crates/tools/CLAUDE.md) |
+| `skill` | [crates/skill/CLAUDE.md](crates/skill/CLAUDE.md) |
 | `llm-protocol` | [crates/llm-protocol/CLAUDE.md](crates/llm-protocol/CLAUDE.md) |
 | `llm-anthropic` | [crates/llm-anthropic/CLAUDE.md](crates/llm-anthropic/CLAUDE.md) |
 | `llm-openai` | [crates/llm-openai/CLAUDE.md](crates/llm-openai/CLAUDE.md) |

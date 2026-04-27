@@ -87,3 +87,11 @@ GET    /v1/providers                    → 列出可用 LLM provider
 ### 凭据管理
 - Vault Proxy 模式：沙箱外注入凭据
 - 初始化注入模式：沙箱创建时一次性注入
+
+### Skill 系统
+- 任务 20-1：`lattice-core` 新增 `ExecutionContext`、`MAX_SKILL_DEPTH`、`ToolError::MaxDepthExceeded`、`EventPayload` 新增变体
+- 任务 20-2：`SessionStore` 新增 `create_child_session` / `child_sessions`，`MemoryStore` 实现子 session
+- 任务 20-3：`ToolSet::execute` + 已有工具适配新签名
+- 任务 20-4：`ControlLoop` 加 `depth` 字段和 builder，构造 `ExecutionContext`
+- 任务 20-5：新建 `lattice-skill` crate（SkillDefinition、SkillToolSet、SkillTool、SkillLoader）
+- 任务 20-6：接入 facade + 示例 skill 目录 + meta-agent example

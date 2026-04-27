@@ -52,34 +52,44 @@ pub trait ToolExecutor: Send + Sync {
     /// Return the tool description for LLM consumption.
     fn description(&self) -> ToolDescription;
 
-    /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError>;
+    /// Execute the tool with the given parameters and execution context.
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError>;
 }
-```
 
-**新增错误类型**：`crates/core/src/error.rs`
+/// Maximum allowed skill nesting depth (0 = meta agent, 1 = direct skill child, etc.).
+pub const MAX_SKILL_DEPTH: u32 = 8;
 
-```rust
+/// Execution context passed to every tool invocation.
+pub struct ExecutionContext {
+    pub session_id: SessionId,
+    pub trigger_event_id: EventId,
+    pub store: Arc<dyn SessionStore>,
+    pub depth: u32,
+}
+
 /// Error from a tool executor.
 #[derive(Debug, Clone, Error)]
+#[error(transparent)]
 pub enum ToolError {
-    /// Tool not found in the registry.
     #[error("tool not found: {0}")]
     NotFound(String),
 
-    /// Invalid parameters provided to the tool.
     #[error("invalid parameters: {0}")]
     InvalidParams(String),
 
-    /// Tool execution failed.
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
 
-    /// Execution timed out.
     #[error("timeout after {timeout_secs}s")]
     Timeout { timeout_secs: u64 },
 
-    /// Generic tool error.
+    #[error("max skill depth {0} exceeded")]
+    MaxDepthExceeded(u32),
+
     #[error("tool error: {0}")]
     Other(String),
 }
@@ -142,6 +152,7 @@ impl ToolSet {
         &self,
         name: &str,
         params: serde_json::Value,
+        ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, ToolError> { ... }
 
     /// Check if a tool is registered.
@@ -189,7 +200,11 @@ impl ToolExecutor for BashTool {
         }
     }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let command = params.get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("missing 'command' field".into()))?;

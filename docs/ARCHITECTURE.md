@@ -105,6 +105,18 @@ pub enum EventPayload {
 
     /// 会话状态变更
     StateChange { from: String, to: String },
+
+    /// Skill 被触发执行 —— 记录在父 session 中
+    SkillInvoked {
+        skill_name: String,
+        child_session_id: SessionId,
+    },
+
+    /// Skill 执行完成 —— 记录在父 session 中
+    SkillCompleted {
+        skill_name: String,
+        child_session_id: SessionId,
+    },
 }
 
 /// 一个不可变事件
@@ -145,6 +157,32 @@ pub trait SessionStore: Send + Sync {
 
     /// Get the latest event id for a session.
     async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError>;
+
+    /// Create a child session under the given parent.
+    ///
+    /// The child session is independent — its events are stored in the
+    /// returned child store. The parent store records the relationship
+    /// for `child_sessions()` queries.
+    async fn create_child_session(
+        &self,
+        parent_session_id: SessionId,
+        skill_name: &str,
+    ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError>;
+
+    /// List all child sessions for a given parent.
+    async fn child_sessions(
+        &self,
+        parent_session_id: SessionId,
+    ) -> Result<Vec<ChildSessionInfo>, StoreError>;
+}
+
+/// Information about a child session (returned by SessionStore::child_sessions).
+#[derive(Debug, Clone)]
+pub struct ChildSessionInfo {
+    pub session_id: SessionId,
+    pub store: Arc<dyn SessionStore>,
+    pub skill_name: String,
+    pub created_at: Timestamp,
 }
 ```
 
@@ -232,24 +270,41 @@ pub struct ExecutionResult {
 **ToolExecutor trait**：
 
 ```rust
+/// Execution context passed to every tool invocation.
+pub struct ExecutionContext {
+    pub session_id: SessionId,
+    pub trigger_event_id: EventId,
+    pub store: Arc<dyn SessionStore>,
+    pub depth: u32,   // 0 = meta agent, 1 = direct skill child, etc.
+}
+pub const MAX_SKILL_DEPTH: u32 = 8;
+
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     /// Return the tool description for LLM consumption.
     fn description(&self) -> ToolDescription;
 
-    /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError>;
+    /// Execute the tool with the given parameters and execution context.
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError>;
 }
 ```
 
 **ToolSet**：
 
 ```rust
-pub struct ToolSet { ... }
 impl ToolSet {
     pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> { ... }
     pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
-    pub async fn execute(&self, name: &str, params: serde_json::Value) -> Result<ExecutionResult, ToolError> { ... }
+    pub async fn execute(
+        &self,
+        name: &str,
+        params: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> { ... }
 }
 ```
 
@@ -460,6 +515,15 @@ Lattice 在此基础上做了一个重要的分层：将「工具描述」（给
 #### ToolExecutor trait（`lattice-core`）
 
 ```rust
+/// Execution context passed to every tool invocation.
+pub struct ExecutionContext {
+    pub session_id: SessionId,
+    pub trigger_event_id: EventId,
+    pub store: Arc<dyn SessionStore>,
+    pub depth: u32,
+}
+pub const MAX_SKILL_DEPTH: u32 = 8;
+
 /// A tool that can be executed by the agent.
 ///
 /// Implementations can be in-process (file read, HTTP fetch) or delegate
@@ -470,8 +534,12 @@ pub trait ToolExecutor: Send + Sync {
     /// Return the tool description for LLM consumption.
     fn description(&self) -> ToolDescription;
 
-    /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError>;
+    /// Execute the tool with the given parameters and execution context.
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError>;
 }
 ```
 
@@ -510,6 +578,7 @@ impl ToolSet {
         &self,
         name: &str,
         params: serde_json::Value,
+        ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, ToolError> { ... }
 }
 ```
@@ -538,7 +607,11 @@ impl ToolExecutor for BashTool {
         { /* Windows cmd description with dir, type, findstr examples */ }
     }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
@@ -574,7 +647,11 @@ pub struct FileReadTool {
 impl ToolExecutor for FileReadTool {
     fn description(&self) -> ToolDescription { /* file_read tool schema */ }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let path = params["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidParams("missing 'path' field".to_string()))?;
