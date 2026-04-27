@@ -851,7 +851,8 @@ mod tests {
             async fn latest_event_id(
                 &self,
                 session_id: SessionId,
-            ) -> Result<Option<lattice_core::EventId>, lattice_core::error::StoreError> {
+            ) -> Result<Option<lattice_core::EventId>, lattice_core::error::StoreError>
+            {
                 self.inner.latest_event_id(session_id).await
             }
         }
