@@ -63,7 +63,7 @@ cargo run --example real-agent -- "What is 2+2?"
 
 **开发脚本**：
 - Unix/Linux/macOS: `./scripts/check.sh`
-- Windows: `.\scripts\check.ps1`（PowerShell 脚本即将添加）
+- Windows: `.\scripts\check.ps1`
 
 ## HTTP API Server
 
