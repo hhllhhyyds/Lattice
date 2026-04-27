@@ -290,10 +290,10 @@ mod tests {
             )
             .await;
         // Command doesn't exist, should return non-zero exit code or error
-        match result {
-            Ok(exec_result) => assert_ne!(exec_result.exit_code, 0),
-            Err(_) => {} // May also return error directly
+        if let Ok(exec_result) = result {
+            assert_ne!(exec_result.exit_code, 0);
         }
+        // If it returns Err, that's also acceptable
     }
 
     // Working directory tests
