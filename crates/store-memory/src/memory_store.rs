@@ -98,6 +98,16 @@ impl SessionStore for MemoryStore {
             result.retain(|e| e.actor == actor);
         }
 
+        if let Some(payload_type) = filter.payload_type {
+            result.retain(|e| {
+                let json = serde_json::to_value(&e.payload).ok();
+                json.as_ref()
+                    .and_then(|v| v.get("type"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == payload_type)
+            });
+        }
+
         Ok(result)
     }
 
@@ -197,6 +207,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(llm_events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_filter_by_payload_type() {
+        let store = MemoryStore::new();
+        let id = store.create_session().await.unwrap();
+
+        store
+            .append_event(
+                id,
+                EventPayload::UserMessage {
+                    content: "user".to_string(),
+                },
+                Actor::System,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                id,
+                EventPayload::Thinking {
+                    reasoning: "thinking".to_string(),
+                },
+                Actor::LLM,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                id,
+                EventPayload::FinalAnswer {
+                    answer: "answer".to_string(),
+                },
+                Actor::LLM,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let thinking_events = store
+            .get_events(
+                id,
+                &EventFilter {
+                    actor: None,
+                    payload_type: Some("thinking"),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(thinking_events.len(), 1);
+
+        let tool_events = store
+            .get_events(
+                id,
+                &EventFilter {
+                    actor: None,
+                    payload_type: Some("toolCallRequested"),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(tool_events.len(), 0);
     }
 
     #[tokio::test]
