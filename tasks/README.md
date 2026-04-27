@@ -2,15 +2,15 @@
 
 ## 第一轮：MVP ✅
 
-| #   | 任务                                                   | 分支名                | 状态 |
-| --- | ------------------------------------------------------ | --------------------- | ---- |
-| 1   | [初始化 workspace + crate 骨架](01-init-workspace.md)  | `feat/init-workspace` | ✅    |
-| 2   | [搭建 CI/CD](02-setup-ci.md)                           | `feat/setup-ci`       | ✅    |
-| 3   | [实现 core 类型和 trait](03-core-traits.md)            | `feat/core-traits`    | ✅    |
-| 4   | [实现 MemoryStore](04-store-memory.md)                 | `feat/store-memory`   | ✅    |
-| 5   | [实现 LocalSandbox](05-sandbox-local.md)               | `feat/sandbox-local`  | ✅    |
-| 6   | [实现 ControlLoop](06-runtime.md)                      | `feat/runtime`        | ✅    |
-| 7   | [实现 hello-agent example](07-hello-agent.md)          | `feat/hello-agent`    | ✅    |
+| #   | 任务                                                  | 分支名                | 状态 |
+| --- | ----------------------------------------------------- | --------------------- | ---- |
+| 1   | [初始化 workspace + crate 骨架](01-init-workspace.md) | `feat/init-workspace` | ✅    |
+| 2   | [搭建 CI/CD](02-setup-ci.md)                          | `feat/setup-ci`       | ✅    |
+| 3   | [实现 core 类型和 trait](03-core-traits.md)           | `feat/core-traits`    | ✅    |
+| 4   | [实现 MemoryStore](04-store-memory.md)                | `feat/store-memory`   | ✅    |
+| 5   | [实现 LocalSandbox](05-sandbox-local.md)              | `feat/sandbox-local`  | ✅    |
+| 6   | [实现 ControlLoop](06-runtime.md)                     | `feat/runtime`        | ✅    |
+| 7   | [实现 hello-agent example](07-hello-agent.md)         | `feat/hello-agent`    | ✅    |
 
 ## 第二轮：真实 LLM 接入 ✅
 
@@ -30,16 +30,31 @@
 
 **目标**：从库升级为可独立部署的平台服务
 
-| #   | 任务                                                  | 分支名                 | 状态 |
-| --- | ----------------------------------------------------- | ---------------------- | ---- |
-| 12  | [Facade crate + Feature Flags](12-facade-features.md) | `feat/facade-features` | ✅    |
-| 13  | [Server crate 骨架 + 基础路由](13-server-skeleton.md) | `feat/server-skeleton` | ✅    |
-| 14  | [会话管理 API](14-session-api.md)                     | `feat/session-api`     | ✅    |
-| 15  | [工具系统：ToolExecutor + ToolSet + 标准工具库](15-tool-system.md) | `feat/tool-system` | ✅ |
-| 16  | [任务提交与 Agent 执行 API](16-agent-run-api.md)      | `feat/agent-run-api`   | ⬜    |
-| 17  | [SSE 实时事件流](17-sse-stream.md)                    | `feat/sse-stream`      | ⬜    |
-| 18  | [配置管理与多 Provider 支持](18-config-provider.md)   | `feat/config-provider` | ⬜    |
-| 19  | [Docker 化独立部署](19-docker-deploy.md)              | `feat/docker-deploy`   | ⬜    |
+| #   | 任务                                                                                     | 分支名                 | 状态 |
+| --- | ---------------------------------------------------------------------------------------- | ---------------------- | ---- |
+| 12  | [Facade crate + Feature Flags](12-facade-features.md)                                    | `feat/facade-features` | ✅    |
+| 13  | [Server crate 骨架 + 基础路由](13-server-skeleton.md)                                    | `feat/server-skeleton` | ✅    |
+| 14  | [会话管理 API](14-session-api.md)                                                        | `feat/session-api`     | ✅    |
+| 15  | [工具系统：ToolExecutor + ToolSet + 标准工具库](15-tool-system.md)                       | `feat/tool-system`     | ✅    |
+| 16  | [任务提交与 Agent 执行 API](16-agent-run-api.md)                                         | `feat/agent-run-api`   | ⬜    |
+| 17  | [SSE 实时事件流](17-sse-stream.md)                                                       | `feat/sse-stream`      | ⬜    |
+| 18  | [配置管理与多 Provider 支持](18-config-provider.md)                                      | `feat/config-provider` | ⬜    |
+| 19  | [Docker 化独立部署](19-docker-deploy.md)                                                 | `feat/docker-deploy`   | ⬜    |
+
+## 第五轮：Skill 系统 🚧
+
+**目标**：实现 Lattice 的 skill 系统，使 meta agent 能将复杂子任务委托给专门的 skill agent 执行。skill 在父 agent 视角是普通 tool 调用，背后运行完整的子 ControlLoop，支持多轮 LLM 决策、独立工具集和独立 session 树节点。
+
+**设计原则**：遵循 [Anthropic Agent Skills 开放标准](https://www.agentskills.com)，以 SKILL.md 为唯一事实来源，实现渐进式披露三层加载。
+
+| #    | 任务                                                           | 分支名                    | 状态 |
+|------|---------------------------------------------------------------|---------------------------|------|
+| 20-1 | [core 层扩展：ExecutionContext + EventPayload + ToolError](20-1-execution-context.md) | `feat/skill-execution-context` | ⬜ |
+| 20-2 | [SessionStore 树形扩展 + MemoryStore 子 session](20-2-session-tree.md)               | `feat/skill-session-tree`      | ⬜ |
+| 20-3 | [ToolSet + 已有工具适配新签名](20-3-tool-execute-ctx.md)                              | `feat/skill-tool-execute-ctx` | ⬜ |
+| 20-4 | [ControlLoop 构造 ExecutionContext + builder](20-4-control-loop-ctx.md)               | `feat/skill-control-loop`      | ⬜ |
+| 20-5 | [lattice-skill crate：SkillDefinition + SkillTool + SkillToolSet + SkillLoader](20-5-skill-crate.md) | `feat/skill-crate`    | ⬜ |
+| 20-6 | [skill feature + 示例 skill 目录 + meta-agent example](20-6-skill-facade.md)         | `feat/skill-facade`           | ⬜ |
 
 ## 后续规划（待拆解）
 
