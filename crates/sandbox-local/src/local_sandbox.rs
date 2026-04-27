@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use lattice_core::{ExecutionResult, Sandbox, SandboxError};
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::instrument;
+use tracing::{debug, info, instrument};
 
 /// Local sandbox that executes commands as subprocesses.
 ///
@@ -85,6 +85,8 @@ impl Sandbox for LocalSandbox {
                 SandboxError::ExecutionFailed("missing 'command' in params".to_string())
             })?;
 
+        debug!("executing command: {}", cmd_str);
+
         // Platform-specific shell selection
         #[cfg(unix)]
         let mut cmd = {
@@ -104,20 +106,33 @@ impl Sandbox for LocalSandbox {
             cmd.current_dir(dir);
         }
 
+        info!("starting command execution with timeout of {} seconds", self.timeout.as_secs());
+
         let result =
             timeout(self.timeout, cmd.output())
                 .await
-                .map_err(|_| SandboxError::Timeout {
-                    timeout_secs: self.timeout.as_secs(),
+                .map_err(|_| {
+                    info!("command timed out after {} seconds", self.timeout.as_secs());
+                    SandboxError::Timeout {
+                        timeout_secs: self.timeout.as_secs(),
+                    }
                 })?;
 
         match result {
-            Ok(output) => Ok(ExecutionResult {
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                exit_code: output.status.code().unwrap_or(-1),
-            }),
-            Err(e) => Err(SandboxError::ExecutionFailed(e.to_string())),
+            Ok(output) => {
+                let exec_result = ExecutionResult {
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    exit_code: output.status.code().unwrap_or(-1),
+                };
+                info!("command completed: exit_code={}, stdout_len={}, stderr_len={}",
+                    exec_result.exit_code, exec_result.stdout.len(), exec_result.stderr.len());
+                Ok(exec_result)
+            }
+            Err(e) => {
+                info!("command execution failed: {}", e);
+                Err(SandboxError::ExecutionFailed(e.to_string()))
+            }
         }
     }
 }
