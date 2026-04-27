@@ -149,4 +149,73 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
     }
+
+    // Platform-aware tool description tests
+    #[test]
+    #[cfg(unix)]
+    fn test_tool_name_on_unix() {
+        let sandbox = Arc::new(MockSandbox::new(Ok(ExecutionResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        })));
+        let tool = BashTool::new(sandbox);
+        let desc = tool.description();
+
+        assert_eq!(desc.name, "sh", "Tool name should be 'sh' on Unix");
+        assert!(
+            desc.description.contains("Unix") || desc.description.contains("shell"),
+            "Description should mention Unix or shell"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_tool_name_on_windows() {
+        let sandbox = Arc::new(MockSandbox::new(Ok(ExecutionResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        })));
+        let tool = BashTool::new(sandbox);
+        let desc = tool.description();
+
+        assert_eq!(desc.name, "cmd", "Tool name should be 'cmd' on Windows");
+        assert!(
+            desc.description.contains("Windows") || desc.description.contains("cmd"),
+            "Description should mention Windows or cmd"
+        );
+    }
+
+    #[test]
+    fn test_description_includes_platform_examples() {
+        let sandbox = Arc::new(MockSandbox::new(Ok(ExecutionResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        })));
+        let tool = BashTool::new(sandbox);
+        let desc = tool.description();
+
+        // Description should include command examples
+        #[cfg(unix)]
+        {
+            assert!(
+                desc.description.contains("ls")
+                    || desc.description.contains("cat")
+                    || desc.description.contains("grep"),
+                "Unix description should include command examples like ls, cat, or grep"
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            assert!(
+                desc.description.contains("dir")
+                    || desc.description.contains("type")
+                    || desc.description.contains("findstr"),
+                "Windows description should include command examples like dir, type, or findstr"
+            );
+        }
+    }
 }
