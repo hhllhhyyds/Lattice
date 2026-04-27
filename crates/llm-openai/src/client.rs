@@ -9,7 +9,7 @@ use lattice_core::{Event, ToolDescription};
 use lattice_llm_protocol::convert::{events_to_messages, tool_descriptions_to_specs};
 use lattice_llm_protocol::message::{ContentBlock, Message, Role};
 use lattice_llm_protocol::response::LLMResponse;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::types::*;
 
@@ -240,7 +240,15 @@ impl lattice_core::LLMClient for OpenAIClient {
             tools,
         };
 
-        debug!("sending request to OpenAI-compatible API");
+        info!(
+            "sending request to OpenAI-compatible API: {} messages, {} tools",
+            request.messages.len(),
+            request.tools.len()
+        );
+        debug!(
+            "request payload: {}",
+            serde_json::to_string(&request).unwrap_or_default()
+        );
 
         let url = format!("{}/chat/completions", self.base_url);
         let http_response = self
@@ -251,7 +259,12 @@ impl lattice_core::LLMClient for OpenAIClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| LLMError::RequestFailed(e.to_string()))?;
+            .map_err(|e| {
+                info!("HTTP request failed: {}", e);
+                LLMError::RequestFailed(e.to_string())
+            })?;
+
+        info!("received HTTP response: status={}", http_response.status());
 
         let status = http_response.status();
         let body = http_response

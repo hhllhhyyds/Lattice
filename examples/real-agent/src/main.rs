@@ -166,11 +166,59 @@ async fn run(task: String) -> Result<()> {
 }
 
 /// Truncate a string to the given length, appending "..." if truncated.
+/// Ensures truncation happens at a valid UTF-8 character boundary.
 fn truncate(s: &str, max: usize) -> String {
     let s = s.replace('\n', "\\n");
     if s.len() > max {
-        format!("{}...", &s[..max])
+        // Find the last character boundary that doesn't exceed max bytes
+        let truncate_at = s
+            .char_indices()
+            .take_while(|(idx, _)| *idx < max)
+            .last()
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .unwrap_or(0);
+        format!("{}...", &s[..truncate_at])
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_ascii() {
+        assert_eq!(truncate("hello world", 5), "hello...");
+        assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    #[test]
+    fn test_truncate_utf8() {
+        // Chinese characters (3 bytes each in UTF-8)
+        assert_eq!(truncate("你好世界", 6), "你好...");
+        assert_eq!(truncate("文件", 3), "文...");
+
+        // Mixed ASCII and Chinese - this string is shorter than 80 bytes
+        let input = r"以下是当前目录 `D:\GKXTwork\Lattice` 下的文件列表";
+        let result = truncate(input, 80);
+        // Since input is less than 80 bytes, it should not be truncated
+        assert_eq!(result, input);
+
+        // Long Chinese string that will be truncated
+        let long_input =
+            "以下是当前目录下的文件列表：文件1、文件2、文件3、文件4、文件5、文件6、文件7、文件8";
+        let result = truncate(long_input, 50);
+        assert!(result.ends_with("..."));
+        // Verify it's valid UTF-8 and doesn't panic
+        assert!(result.chars().count() > 0);
+        // Verify the truncation happened at a character boundary (no panic = success)
+        assert!(!result.is_empty() && result.len() < long_input.len());
+    }
+
+    #[test]
+    fn test_truncate_newlines() {
+        assert_eq!(truncate("hello\nworld", 20), "hello\\nworld");
+        assert_eq!(truncate("line1\nline2\nline3", 10), "line1\\nlin...");
     }
 }

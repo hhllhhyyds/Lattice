@@ -34,6 +34,37 @@ LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=http://localhost:8000/v1 \
   cargo run --example real-agent -- "List files"
 ```
 
+## 平台支持
+
+Lattice 支持以下平台：
+- Linux (x86_64, aarch64)
+- macOS (Intel, Apple Silicon)
+- Windows 10/11 (x86_64)
+
+### Windows 用户注意事项
+
+在 Windows 上，环境变量设置语法不同：
+
+**PowerShell**：
+```powershell
+$env:LATTICE_LLM_PROVIDER="anthropic"
+$env:LATTICE_API_KEY="sk-ant-xxx"
+$env:LATTICE_MODEL="claude-sonnet-4-6"
+cargo run --example real-agent -- "What is 2+2?"
+```
+
+**CMD**：
+```cmd
+set LATTICE_LLM_PROVIDER=anthropic
+set LATTICE_API_KEY=sk-ant-xxx
+set LATTICE_MODEL=claude-sonnet-4-6
+cargo run --example real-agent -- "What is 2+2?"
+```
+
+**开发脚本**：
+- Unix/Linux/macOS: `./scripts/check.sh`
+- Windows: `.\scripts\check.ps1`
+
 ## HTTP API Server
 
 ```bash

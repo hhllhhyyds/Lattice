@@ -121,9 +121,11 @@ impl ControlLoop {
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+                    info!("executing tool: {}", tool);
                     // Execute the tool and record the result (or error) directly.
                     match self.tools.execute(&tool, params).await {
                         Ok(result) => {
+                            info!("tool execution succeeded: exit_code={}", result.exit_code);
                             self.store
                                 .append_event(
                                     session_id,
@@ -139,6 +141,7 @@ impl ControlLoop {
                                 .map_err(|e| anyhow::anyhow!("{e}"))?;
                         }
                         Err(e) => {
+                            warn!("tool execution failed: {}", e);
                             self.store
                                 .append_event(
                                     session_id,
@@ -152,6 +155,7 @@ impl ControlLoop {
                                 .map_err(|e| anyhow::anyhow!("{e}"))?;
                         }
                     }
+                    info!("tool call completed, continuing loop");
                 }
                 Decision::FinalAnswer { answer } => {
                     info!(?answer, "LLM final answer");
