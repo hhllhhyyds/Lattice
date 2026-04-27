@@ -23,21 +23,46 @@ impl BashTool {
 #[async_trait]
 impl ToolExecutor for BashTool {
     fn description(&self) -> ToolDescription {
-        ToolDescription {
-            name: "bash".to_string(),
-            description: "Execute a bash command in a sandboxed environment. \
-                 Use this for running shell commands, scripts, and system operations."
-                .to_string(),
-            parameters_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The bash command to execute"
-                    }
-                },
-                "required": ["command"]
-            }),
+        #[cfg(unix)]
+        {
+            ToolDescription {
+                name: "sh".to_string(),
+                description: "Execute a Unix shell command in a sandboxed environment. \
+                     Use Unix-specific commands like 'ls' (list files), 'cat' (read file), \
+                     'echo' (print text), 'grep' (search text), 'find' (search files)."
+                    .to_string(),
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The Unix shell command to execute"
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            ToolDescription {
+                name: "cmd".to_string(),
+                description: "Execute a Windows cmd.exe command in a sandboxed environment. \
+                     Use Windows-specific commands like 'dir' (list files), 'type' (read file), \
+                     'echo' (print text), 'findstr' (search text), 'where' (find files)."
+                    .to_string(),
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The Windows cmd.exe command to execute"
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            }
         }
     }
 
