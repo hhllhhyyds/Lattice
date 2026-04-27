@@ -254,4 +254,108 @@ mod tests {
         // In cmd.exe, it would output literal "$SHELL"
         assert!(!result.stdout.trim().is_empty());
     }
+
+    // Error handling tests
+    #[tokio::test]
+    async fn test_missing_command_parameter() {
+        let sandbox = LocalSandbox::new();
+        let result = sandbox.execute(TOOL_NAME, serde_json::json!({})).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SandboxError::ExecutionFailed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_command_type() {
+        let sandbox = LocalSandbox::new();
+        let result = sandbox
+            .execute(TOOL_NAME, serde_json::json!({ "command": 123 }))
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SandboxError::ExecutionFailed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_nonexistent_command() {
+        let sandbox = LocalSandbox::new();
+        let result = sandbox
+            .execute(
+                TOOL_NAME,
+                serde_json::json!({ "command": "nonexistent_command_xyz_12345" }),
+            )
+            .await;
+        // Command doesn't exist, should return non-zero exit code or error
+        match result {
+            Ok(exec_result) => assert_ne!(exec_result.exit_code, 0),
+            Err(_) => {} // May also return error directly
+        }
+    }
+
+    // Working directory tests
+    #[tokio::test]
+    async fn test_with_work_dir() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let sandbox = LocalSandbox::with_work_dir(temp_dir.clone());
+
+        #[cfg(unix)]
+        let result = sandbox
+            .execute("sh", serde_json::json!({ "command": "pwd" }))
+            .await
+            .unwrap();
+
+        #[cfg(windows)]
+        let result = sandbox
+            .execute("cmd", serde_json::json!({ "command": "cd" }))
+            .await
+            .unwrap();
+
+        // Just verify the command executed successfully
+        // The exact output format may vary by platform
+        assert_eq!(result.exit_code, 0);
+        assert!(!result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_work_dir() {
+        use std::path::PathBuf;
+        let invalid_dir = PathBuf::from("/nonexistent/directory/xyz/abc");
+        let sandbox = LocalSandbox::with_work_dir(invalid_dir);
+
+        let result = sandbox
+            .execute(TOOL_NAME, serde_json::json!({ "command": "echo test" }))
+            .await;
+
+        // Should return error because working directory doesn't exist
+        assert!(result.is_err());
+    }
+
+    // Constructor tests
+    #[test]
+    fn test_default() {
+        let sandbox = LocalSandbox::default();
+        assert_eq!(sandbox.timeout, Duration::from_secs(30));
+        assert!(sandbox.work_dir.is_none());
+    }
+
+    #[test]
+    fn test_with_timeout_constructor() {
+        let sandbox = LocalSandbox::with_timeout(Duration::from_secs(60));
+        assert_eq!(sandbox.timeout, Duration::from_secs(60));
+        assert!(sandbox.work_dir.is_none());
+    }
+
+    #[test]
+    fn test_with_work_dir_constructor() {
+        use std::path::PathBuf;
+        let dir = PathBuf::from("/tmp");
+        let sandbox = LocalSandbox::with_work_dir(dir.clone());
+        assert_eq!(sandbox.work_dir, Some(dir));
+        assert_eq!(sandbox.timeout, Duration::from_secs(30));
+    }
 }
