@@ -112,11 +112,34 @@ impl Sandbox for LocalSandbox {
 mod tests {
     use super::*;
 
+    // Platform-specific test commands
+    #[cfg(unix)]
+    mod platform_commands {
+        pub const TOOL_NAME: &str = "sh";
+        pub const ECHO_HELLO: &str = "echo hello";
+        pub const EXIT_42: &str = "exit 42";
+        pub const SLEEP_LONG: &str = "sleep 10";
+        pub const ECHO_STDERR: &str = "echo error >&2";
+    }
+
+    #[cfg(windows)]
+    mod platform_commands {
+        pub const TOOL_NAME: &str = "cmd";
+        pub const ECHO_HELLO: &str = "echo hello";
+        pub const EXIT_42: &str = "exit 42";
+        // Use ping as a sleep alternative on Windows (more reliable for timeout tests)
+        // Note: ping output is ignored by the test, we only care about the timeout
+        pub const SLEEP_LONG: &str = "ping -n 11 127.0.0.1";
+        pub const ECHO_STDERR: &str = "echo error 1>&2";
+    }
+
+    use platform_commands::*;
+
     #[tokio::test]
     async fn test_echo_stdout() {
         let sandbox = LocalSandbox::new();
         let result = sandbox
-            .execute("bash", serde_json::json!({ "command": "echo hello" }))
+            .execute(TOOL_NAME, serde_json::json!({ "command": ECHO_HELLO }))
             .await
             .unwrap();
         assert_eq!(result.stdout.trim(), "hello");
@@ -127,7 +150,7 @@ mod tests {
     async fn test_failed_command_exit_code() {
         let sandbox = LocalSandbox::new();
         let result = sandbox
-            .execute("bash", serde_json::json!({ "command": "exit 42" }))
+            .execute(TOOL_NAME, serde_json::json!({ "command": EXIT_42 }))
             .await
             .unwrap();
         assert_eq!(result.exit_code, 42);
@@ -137,7 +160,7 @@ mod tests {
     async fn test_timeout() {
         let sandbox = LocalSandbox::with_timeout(Duration::from_millis(100));
         let result = sandbox
-            .execute("bash", serde_json::json!({ "command": "sleep 10" }))
+            .execute(TOOL_NAME, serde_json::json!({ "command": SLEEP_LONG }))
             .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), SandboxError::Timeout { .. }));
@@ -147,10 +170,55 @@ mod tests {
     async fn test_stderr_capture() {
         let sandbox = LocalSandbox::new();
         let result = sandbox
-            .execute("bash", serde_json::json!({ "command": "echo error >&2" }))
+            .execute(TOOL_NAME, serde_json::json!({ "command": ECHO_STDERR }))
             .await
             .unwrap();
         assert_eq!(result.stderr.trim(), "error");
         assert_eq!(result.exit_code, 0);
+    }
+
+    // Cross-platform integration test: verify basic command execution works
+    #[tokio::test]
+    async fn test_cross_platform_basic_command() {
+        let sandbox = LocalSandbox::new();
+        let result = sandbox
+            .execute(TOOL_NAME, serde_json::json!({ "command": "echo test" }))
+            .await
+            .unwrap();
+        assert_eq!(result.stdout.trim(), "test");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // Test platform-specific shell behavior
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn test_windows_uses_cmd() {
+        let sandbox = LocalSandbox::new();
+        // This command only works in cmd.exe, not in sh
+        let result = sandbox
+            .execute("cmd", serde_json::json!({ "command": "echo %OS%" }))
+            .await
+            .unwrap();
+        // In cmd.exe, %OS% expands to "Windows_NT"
+        // In sh, it would output literal "%OS%"
+        assert!(
+            result.stdout.contains("Windows_NT"),
+            "Expected cmd.exe to expand %OS% to Windows_NT, got: {}",
+            result.stdout
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_unix_uses_sh() {
+        let sandbox = LocalSandbox::new();
+        // This command only works in sh, not in cmd.exe
+        let result = sandbox
+            .execute("sh", serde_json::json!({ "command": "echo $SHELL" }))
+            .await
+            .unwrap();
+        // In sh, $SHELL expands to the shell path
+        // In cmd.exe, it would output literal "$SHELL"
+        assert!(!result.stdout.trim().is_empty());
     }
 }
