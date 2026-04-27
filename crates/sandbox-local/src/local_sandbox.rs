@@ -106,17 +106,17 @@ impl Sandbox for LocalSandbox {
             cmd.current_dir(dir);
         }
 
-        info!("starting command execution with timeout of {} seconds", self.timeout.as_secs());
+        info!(
+            "starting command execution with timeout of {} seconds",
+            self.timeout.as_secs()
+        );
 
-        let result =
-            timeout(self.timeout, cmd.output())
-                .await
-                .map_err(|_| {
-                    info!("command timed out after {} seconds", self.timeout.as_secs());
-                    SandboxError::Timeout {
-                        timeout_secs: self.timeout.as_secs(),
-                    }
-                })?;
+        let result = timeout(self.timeout, cmd.output()).await.map_err(|_| {
+            info!("command timed out after {} seconds", self.timeout.as_secs());
+            SandboxError::Timeout {
+                timeout_secs: self.timeout.as_secs(),
+            }
+        })?;
 
         match result {
             Ok(output) => {
@@ -125,8 +125,12 @@ impl Sandbox for LocalSandbox {
                     stderr: String::from_utf8_lossy(&output.stderr).to_string(),
                     exit_code: output.status.code().unwrap_or(-1),
                 };
-                info!("command completed: exit_code={}, stdout_len={}, stderr_len={}",
-                    exec_result.exit_code, exec_result.stdout.len(), exec_result.stderr.len());
+                info!(
+                    "command completed: exit_code={}, stdout_len={}, stderr_len={}",
+                    exec_result.exit_code,
+                    exec_result.stdout.len(),
+                    exec_result.stderr.len()
+                );
                 Ok(exec_result)
             }
             Err(e) => {

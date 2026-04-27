@@ -240,9 +240,15 @@ impl lattice_core::LLMClient for OpenAIClient {
             tools,
         };
 
-        info!("sending request to OpenAI-compatible API: {} messages, {} tools",
-            request.messages.len(), request.tools.len());
-        debug!("request payload: {}", serde_json::to_string(&request).unwrap_or_default());
+        info!(
+            "sending request to OpenAI-compatible API: {} messages, {} tools",
+            request.messages.len(),
+            request.tools.len()
+        );
+        debug!(
+            "request payload: {}",
+            serde_json::to_string(&request).unwrap_or_default()
+        );
 
         let url = format!("{}/chat/completions", self.base_url);
         let http_response = self
