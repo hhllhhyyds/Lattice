@@ -63,6 +63,7 @@ pub type Timestamp = chrono::DateTime<chrono::Utc>;
 
 /// 产生事件的角色
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
 pub enum Actor {
     System,
     LLM,
@@ -72,7 +73,7 @@ pub enum Actor {
 
 /// 事件负载
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum EventPayload {
     /// 会话创建
     SessionCreated,
@@ -135,18 +136,15 @@ pub trait SessionStore: Send + Sync {
         parent_event_id: Option<EventId>,
     ) -> Result<EventId, StoreError>;
 
-    /// 查询事件
+    /// Retrieve events for a session, optionally filtered.
     async fn get_events(
         &self,
         session_id: SessionId,
         filter: &EventFilter,
     ) -> Result<Vec<Event>, StoreError>;
 
-    /// 获取会话的最新事件序号（用于恢复断点）
-    async fn latest_event_id(
-        &self,
-        session_id: SessionId,
-    ) -> Result<Option<EventId>, StoreError>;
+    /// Get the latest event id for a session.
+    async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError>;
 }
 ```
 
@@ -190,7 +188,7 @@ pub trait LLMClient: Send + Sync {
 
 /// LLM 的决策
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Decision {
     Thinking { reasoning: String },
     ToolCall { tool: String, params: serde_json::Value },
@@ -575,13 +573,9 @@ impl ToolExecutor for FileReadTool {
 
 `ToolSet` 统一了工具描述和工具执行两个职责，取代了之前的 `Vec<ToolDescription>` + `SandboxRouter` 分离模式。
 
-`SandboxRouter` trait 和 `BasicSandboxRouter` 已被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 改为持有 `Arc<ToolSet>`：
+`SandboxRouter` trait 和 `BasicSandboxRouter` 已被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 持有 `Arc<ToolSet>`：
 
 ```rust
-// Before:
-let control_loop = ControlLoop::with_options(store, llm, router, vec![], prompt, max_iter);
-
-// After:
 let tools = Arc::new(ToolSet::with_defaults(sandbox));
 let control_loop = ControlLoop::new(store, llm, tools);
 
