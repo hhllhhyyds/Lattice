@@ -925,13 +925,8 @@ mod tests {
         let llm = Arc::new(TestLLM::with_sequence(decisions));
         let tools = make_tools();
 
-        let control_loop = crate::ControlLoop::with_options(
-            Arc::new(store),
-            llm,
-            tools,
-            "prompt".into(),
-            10,
-        );
+        let control_loop =
+            crate::ControlLoop::with_options(Arc::new(store), llm, tools, "prompt".into(), 10);
 
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "done");
