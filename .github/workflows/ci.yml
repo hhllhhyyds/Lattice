@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**']  # 允许 feat/ 开头的分支触发 CI
   pull_request:
     branches: [main]
 
