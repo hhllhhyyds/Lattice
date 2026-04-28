@@ -51,6 +51,11 @@ LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-ant-xxx \
 # OpenAI 兼容（包括 MiniMax、vLLM、Ollama 等）
 LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=http://localhost:8000/v1 \
   cargo run --example real-agent -- "List files"
+
+# Codex CLI login (uses your ChatGPT/Codex login, no API key)
+# First run `codex` and choose "Sign in with ChatGPT"
+LATTICE_LLM_PROVIDER=codex \
+  cargo run --example real-agent -- "What is 2+2?"
 ```
 
 ## 平台支持
@@ -71,6 +76,18 @@ $env:LATTICE_API_KEY="sk-ant-xxx"
 $env:LATTICE_MODEL="claude-sonnet-4-6"
 cargo run --example real-agent -- "What is 2+2?"
 ```
+
+**Codex CLI login (PowerShell)**:
+```powershell
+# First make sure Codex CLI is signed in.
+codex
+
+$env:LATTICE_LLM_PROVIDER="codex"
+Remove-Item Env:LATTICE_MODEL -ErrorAction SilentlyContinue
+cargo run --example real-agent -- "What is 2+2?"
+```
+
+Codex CLI mode runs local `codex exec`, so authentication, token refresh, model availability, and the ChatGPT/Codex backend protocol are handled by Codex CLI. This mode defaults to `gpt-5.5`; `gpt-4o` is not a supported model name for Codex CLI when using a ChatGPT/Codex account.
 
 **CMD**：
 ```cmd

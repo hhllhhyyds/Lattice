@@ -8,6 +8,11 @@
 //!   LATTICE_MODEL=MiniMax-M2.7 \
 //!   cargo run -p real-agent -- "List files in the current directory"
 //!
+//! # Codex CLI login
+//! LATTICE_LLM_PROVIDER=codex \
+//!   LATTICE_MODEL=gpt-5.5 \
+//!   cargo run -p real-agent -- "List files in the current directory"
+//!
 //! # Anthropic
 //! LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-ant-xxx \
 //!   LATTICE_MODEL=claude-sonnet-4-20250514 \
@@ -54,10 +59,10 @@ fn main() -> Result<()> {
 async fn run(task: String) -> Result<()> {
     // Read configuration from environment variables.
     let provider = env::var("LATTICE_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
-    let api_key = env::var("LATTICE_API_KEY").context("LATTICE_API_KEY not set")?;
     let api_base = env::var("LATTICE_API_BASE").ok();
     let model = env::var("LATTICE_MODEL").unwrap_or_else(|_| match provider.as_str() {
         "anthropic" => "claude-sonnet-4-20250514".into(),
+        "codex" => "gpt-5.5".into(),
         _ => "gpt-4o".into(),
     });
 
@@ -66,14 +71,20 @@ async fn run(task: String) -> Result<()> {
     // Create the LLM client based on provider.
     let llm: Arc<dyn LLMClient> = match provider.as_str() {
         "anthropic" => {
+            let api_key = env::var("LATTICE_API_KEY").context("LATTICE_API_KEY not set")?;
             let mut client = lattice::llm_anthropic::AnthropicClient::new(&api_key, &model);
             if let Some(base) = api_base {
                 client = client.with_base_url(base);
             }
             Arc::new(client)
         }
+        "codex" => {
+            let _ = api_base;
+            Arc::new(lattice::llm_openai::CodexCliClient::new(&model))
+        }
         _ => {
-            let mut client = lattice::llm_openai::OpenAIClient::new(&api_key, &model);
+            let api_key = env::var("LATTICE_API_KEY").context("LATTICE_API_KEY not set")?;
+            let mut client = lattice::llm_openai::OpenAIClient::new(api_key, &model);
             if let Some(base) = api_base {
                 client = client.with_base_url(base);
             }
