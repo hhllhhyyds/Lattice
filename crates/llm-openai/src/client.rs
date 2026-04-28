@@ -261,6 +261,7 @@ impl lattice_core::LLMClient for OpenAIClient {
             messages,
             max_tokens: Some(self.max_tokens),
             tools,
+            stream: false,  // Disable streaming to get complete JSON response
         };
 
         info!(
