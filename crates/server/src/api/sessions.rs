@@ -40,6 +40,11 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/sessions/{id}", get(get_session))
         .route("/sessions/{id}/events", get(get_events))
+        .route(
+            "/sessions/{id}/messages",
+            post(submit_message).get(get_messages),
+        )
+        .route("/sessions/{id}/status", get(get_status))
 }
 
 /// POST /v1/sessions — creates a new session.
@@ -275,4 +280,201 @@ async fn run_status_and_info(
         }
         None => (SessionStatus::Created, None),
     }
+}
+
+// --- Task 16: Agent Run API handlers ---
+
+/// POST /v1/sessions/:id/messages — submit message and trigger agent execution.
+async fn submit_message(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+    Json(req): Json<SubmitMessageRequest>,
+) -> Result<(axum::http::StatusCode, Json<SubmitMessageResponse>), AppError> {
+    // Verify session exists.
+    {
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
+    }
+
+    // Validate request.
+    if req.content.trim().is_empty() {
+        return Err(AppError::InvalidRequest(
+            "content field is required and cannot be empty".into(),
+        ));
+    }
+
+    // Check for concurrent run.
+    {
+        let runs = state.active_runs.read().await;
+        if runs.contains_key(&session_id) {
+            return Err(AppError::Conflict(
+                "Session already has a running task".into(),
+            ));
+        }
+    }
+
+    // Append UserMessage event.
+    state
+        .store
+        .append_event(
+            session_id,
+            lattice_core::EventPayload::UserMessage {
+                content: req.content.clone(),
+            },
+            Actor::Harness,
+            None,
+        )
+        .await
+        .map_err(|e| AppError::InternalError(e.to_string()))?;
+
+    // Register a RunHandle (for now, just mark as running).
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now();
+
+    {
+        let mut runs = state.active_runs.write().await;
+        let join_handle = tokio::spawn(async {
+            // TODO: Actually run ControlLoop here.
+            // For now, just sleep briefly to simulate work.
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        });
+
+        runs.insert(
+            session_id,
+            crate::RunHandle {
+                session_id,
+                status: crate::RunStatus::Running,
+                started_at,
+                abort_handle: join_handle.abort_handle(),
+            },
+        );
+    }
+
+    let response = SubmitMessageResponse {
+        session_id,
+        run_id,
+        status: "running",
+        message: "Agent task started",
+    };
+
+    Ok((axum::http::StatusCode::ACCEPTED, Json(response)))
+}
+
+/// GET /v1/sessions/:id/messages — get conversation history.
+async fn get_messages(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<MessagesResponse>, AppError> {
+    // Verify session exists.
+    {
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
+    }
+
+    // Get all events.
+    let events = state
+        .store
+        .get_events(session_id, &lattice_core::EventFilter::default())
+        .await
+        .map_err(|e| AppError::InternalError(e.to_string()))?;
+
+    // Extract UserMessage and FinalAnswer events.
+    let mut messages = Vec::new();
+    for event in events {
+        match event.payload {
+            lattice_core::EventPayload::UserMessage { content } => {
+                messages.push(Message {
+                    role: "user",
+                    content,
+                    timestamp: event.timestamp,
+                });
+            }
+            lattice_core::EventPayload::FinalAnswer { answer } => {
+                messages.push(Message {
+                    role: "assistant",
+                    content: answer,
+                    timestamp: event.timestamp,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Json(MessagesResponse { messages }))
+}
+
+/// GET /v1/sessions/:id/status — query execution status.
+async fn get_status(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+) -> Result<Json<StatusResponse>, AppError> {
+    // Verify session exists.
+    {
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
+    }
+
+    // Get event count.
+    let events = state
+        .store
+        .get_events(session_id, &lattice_core::EventFilter::default())
+        .await
+        .map_err(|e| AppError::InternalError(e.to_string()))?;
+    let event_count = events.len();
+
+    // Get latest event.
+    let latest_event = events.last().map(|e| {
+        let payload_type = match &e.payload {
+            lattice_core::EventPayload::SessionCreated => "sessionCreated",
+            lattice_core::EventPayload::UserMessage { .. } => "userMessage",
+            lattice_core::EventPayload::Thinking { .. } => "thinking",
+            lattice_core::EventPayload::ToolCallRequested { .. } => "toolCallRequested",
+            lattice_core::EventPayload::ToolCallResult { .. } => "toolCallResult",
+            lattice_core::EventPayload::ToolCallError { .. } => "toolCallError",
+            lattice_core::EventPayload::FinalAnswer { .. } => "finalAnswer",
+            lattice_core::EventPayload::StateChange { .. } => "stateChange",
+        };
+        LatestEventInfo {
+            event_id: e.event_id,
+            actor: e.actor,
+            payload_type: payload_type.to_string(),
+            timestamp: e.timestamp,
+        }
+    });
+
+    // Check run status.
+    let (run_status, run_started_at, run_completed_at) = {
+        let runs = state.active_runs.read().await;
+        if let Some(handle) = runs.get(&session_id) {
+            let status = match handle.status {
+                crate::RunStatus::Running => "running",
+                crate::RunStatus::Completed => "completed",
+                crate::RunStatus::Failed(_) => "failed",
+            };
+            let completed_at = match handle.status {
+                crate::RunStatus::Completed | crate::RunStatus::Failed(_) => {
+                    Some(chrono::Utc::now())
+                }
+                _ => None,
+            };
+            (status, Some(handle.started_at), completed_at)
+        } else {
+            ("idle", None, None)
+        }
+    };
+
+    Ok(Json(StatusResponse {
+        session_id,
+        run_status,
+        run_started_at,
+        run_completed_at,
+        event_count,
+        latest_event,
+    }))
 }

@@ -127,3 +127,95 @@ pub struct EventListResponse {
     /// Whether more events exist beyond the returned set.
     pub has_more: bool,
 }
+
+// --- Task 16: Agent Run API types ---
+
+/// Request to submit a message and trigger agent execution.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitMessageRequest {
+    /// User message content.
+    #[serde(default)]
+    pub content: String,
+    /// Optional LLM provider (e.g., "anthropic", "openai").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)] // TODO: use in LLM client factory
+    pub provider: Option<String>,
+    /// Optional model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)] // TODO: use in LLM client factory
+    pub model: Option<String>,
+    /// Optional system prompt override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)] // TODO: use in ControlLoop
+    pub system_prompt: Option<String>,
+}
+
+/// Response after submitting a message (202 Accepted).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitMessageResponse {
+    /// Session ID for this run.
+    pub session_id: SessionId,
+    /// Unique run identifier.
+    pub run_id: String,
+    /// Current run status (always "running" on submission).
+    pub status: &'static str,
+    /// Human-readable message.
+    pub message: &'static str,
+}
+
+/// A message in the conversation (user or assistant).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Message {
+    /// Role: "user" or "assistant".
+    pub role: &'static str,
+    /// Message content.
+    pub content: String,
+    /// When the message was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Response for GET /v1/sessions/:id/messages.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagesResponse {
+    /// Conversation messages (UserMessage + FinalAnswer events).
+    pub messages: Vec<Message>,
+}
+
+/// Response for GET /v1/sessions/:id/status.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusResponse {
+    /// Session ID.
+    pub session_id: SessionId,
+    /// Current run status: "idle", "running", "completed", "failed".
+    pub run_status: &'static str,
+    /// When the run started (null if idle).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_started_at: Option<DateTime<Utc>>,
+    /// When the run completed (null if not completed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_completed_at: Option<DateTime<Utc>>,
+    /// Total number of events in the session.
+    pub event_count: usize,
+    /// Latest event summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_event: Option<LatestEventInfo>,
+}
+
+/// Summary of the latest event in a session.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestEventInfo {
+    /// Event ID.
+    pub event_id: EventId,
+    /// Actor who produced the event.
+    pub actor: Actor,
+    /// Payload type name (e.g., "sessionCreated", "toolCallRequested").
+    pub payload_type: String,
+    /// When the event occurred.
+    pub timestamp: DateTime<Utc>,
+}

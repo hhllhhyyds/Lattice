@@ -2,13 +2,15 @@
 
 ## Purpose
 
-HTTP API server built on axum. Exposes the Lattice agent framework as a REST API with session management, event querying, and (in the future) message submission and run triggering. Supports multiple LLM providers via feature flags.
+HTTP API server built on axum. Exposes the Lattice agent framework as a REST API with session management, event querying, message submission, and agent run triggering. Supports multiple LLM providers via feature flags.
 
 ## Key Types
 
 - `AppState` — global shared state: `store`, `active_runs`, `started_at`, `sessions`
 - `Router` — built via `router()` / `app()`, mounts `/health` and `/v1` route groups
 - `RunHandle` / `RunStatus` — tracks in-flight agent runs with abort support
+- `SubmitMessageRequest` / `SubmitMessageResponse` — message submission and run triggering
+- `MessagesResponse` / `StatusResponse` — conversation history and execution status
 
 ## API Routes
 
@@ -19,7 +21,9 @@ HTTP API server built on axum. Exposes the Lattice agent framework as a REST API
 | GET | `/v1/sessions` | List all sessions |
 | GET | `/v1/sessions/:id` | Get session details |
 | GET | `/v1/sessions/:id/events` | Get events (supports `actor`, `eventType`, `after`, `limit` filters) |
-| POST | `/v1/sessions/:id/runs` | *(planned)* Trigger an agent run |
+| POST | `/v1/sessions/:id/messages` | Submit user message and trigger agent execution (returns 202 Accepted) |
+| GET | `/v1/sessions/:id/messages` | Get conversation history (UserMessage + FinalAnswer events) |
+| GET | `/v1/sessions/:id/status` | Query execution status (idle/running/completed/failed) |
 
 ## Design Decisions
 
@@ -30,17 +34,30 @@ HTTP API server built on axum. Exposes the Lattice agent framework as a REST API
 
 ## Patterns
 
-- All handler functions return `Result<Json<T>, AppError>`.
+- All handler functions return `Result<Json<T>, AppError>` or `Result<(StatusCode, Json<T>), AppError>`.
 - Error responses follow `{ error: { code: "...", message: "..." } }` format.
 - Feature flags: `default = anthropic + openai`; individual providers can be disabled.
+- Agent runs are spawned as tokio tasks and tracked via `RunHandle` in `active_runs`.
+- Concurrent execution per session is prevented (returns 409 Conflict).
 
 ## Known Issues
 
-- [#29](https://github.com/hhllhhyyds/Lattice/issues/29) — Server API is read-only, missing message submission and run trigger endpoints
 - [#37](https://github.com/hhllhhyyds/Lattice/issues/37) — Server startup banner shows "UNKEN" instead of "LATTICE"
 - [#38](https://github.com/hhllhhyyds/Lattice/issues/38) — Server lacks graceful shutdown handling
+- Agent execution currently uses mock task (50ms sleep) instead of real ControlLoop
+- LLM provider/model/system_prompt parameters are accepted but not yet used
 
 ## Dependencies
 
-- Depends on: `lattice-core`, `lattice-runtime`, `lattice-store-memory`
+- Depends on: `lattice-core`, `lattice-runtime`, `lattice-store-memory`, `lattice-sandbox-local`, `lattice-tools`
 - Depended on by: (public-facing service)
+
+## Recent Changes
+
+### Task 16: Agent Run API (2026-04-28)
+- Added POST `/v1/sessions/:id/messages` for message submission and agent triggering
+- Added GET `/v1/sessions/:id/messages` for conversation history
+- Added GET `/v1/sessions/:id/status` for execution status querying
+- Added `Conflict` error type (409) for concurrent run detection
+- Implemented `RunHandle` registration and tracking
+- 13 integration tests added, all passing
