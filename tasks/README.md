@@ -19,6 +19,7 @@
 | 8   | [LLM 通用协议层设计](08-llm-protocol.md)            | `feat/llm-protocol`  | ✅    |
 | 9   | [实现 Anthropic (Claude) 后端](09-llm-anthropic.md) | `feat/llm-anthropic` | ✅    |
 | 10  | [实现 OpenAI 兼容后端](10-llm-openai.md)            | `feat/llm-openai`    | ✅    |
+| 10.1 | [支持多工具并行调用（串行执行）](10.1-multi-tool-call-support.md) | `feat/multi-tool-call` | 🚧 |
 
 ## 第三轮：真实 LLM 验证 ✅
 
