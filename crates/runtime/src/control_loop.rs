@@ -1131,7 +1131,11 @@ mod tests {
             .unwrap();
 
         // Should have: initial + 3 ToolCallRequested + 3 ToolCallResult + FinalAnswer
-        assert!(session_events.len() >= 8, "Expected at least 8 events, got {}", session_events.len());
+        assert!(
+            session_events.len() >= 8,
+            "Expected at least 8 events, got {}",
+            session_events.len()
+        );
 
         // Verify all 3 ToolCallRequested events
         let requested_count = session_events
@@ -1180,7 +1184,7 @@ mod tests {
                     },
                     ToolCallRequest {
                         id: "call_2".into(),
-                        tool: "nonexistent".into(),  // This will fail
+                        tool: "nonexistent".into(), // This will fail
                         params: serde_json::json!({}),
                     },
                     ToolCallRequest {
@@ -1407,16 +1411,23 @@ mod tests {
 
         // Verify all requests come before all results
         // Expected order: [req1, req2, result1, result2]
-        assert!(request_indices[0] < result_indices[0], "First request should come before first result");
-        assert!(request_indices[1] < result_indices[0], "Second request should come before first result");
-        assert!(request_indices[1] < result_indices[1], "Second request should come before second result");
+        assert!(
+            request_indices[0] < result_indices[0],
+            "First request should come before first result"
+        );
+        assert!(
+            request_indices[1] < result_indices[0],
+            "Second request should come before first result"
+        );
+        assert!(
+            request_indices[1] < result_indices[1],
+            "Second request should come before second result"
+        );
     }
 
     /// Test for Issue #27: Empty MultiToolCall
     #[tokio::test]
     async fn test_multi_tool_call_empty() {
-        use lattice_core::llm::ToolCallRequest;
-
         let session_id = SessionId::new_v4();
         let store = TestStore::new();
         store.insert_session(
@@ -1435,9 +1446,7 @@ mod tests {
 
         // LLM returns empty MultiToolCall (edge case)
         let decisions = vec![
-            Decision::MultiToolCall {
-                calls: vec![],
-            },
+            Decision::MultiToolCall { calls: vec![] },
             Decision::FinalAnswer {
                 answer: "nothing to do".into(),
             },
@@ -1470,6 +1479,9 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(tool_event_count, 0, "Empty MultiToolCall should not create any tool events");
+        assert_eq!(
+            tool_event_count, 0,
+            "Empty MultiToolCall should not create any tool events"
+        );
     }
 }

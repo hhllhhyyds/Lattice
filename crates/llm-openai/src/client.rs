@@ -186,9 +186,7 @@ impl OpenAIClient {
         // Check for tool calls first.
         if let Some(tool_calls) = msg.tool_calls {
             if tool_calls.is_empty() {
-                return Err(LLMError::InvalidResponse(
-                    "empty tool_calls array".into(),
-                ));
+                return Err(LLMError::InvalidResponse("empty tool_calls array".into()));
             }
 
             if tool_calls.len() == 1 {
@@ -667,7 +665,10 @@ mod tests {
                     _ => panic!("expected ToolUse block"),
                 }
             }
-            _ => panic!("expected Mixed response with multiple tool calls, got {:?}", result),
+            _ => panic!(
+                "expected Mixed response with multiple tool calls, got {:?}",
+                result
+            ),
         }
     }
 
@@ -682,16 +683,14 @@ mod tests {
                 message: OpenAIResponseMessage {
                     role: "assistant".into(),
                     content: None,
-                    tool_calls: Some(vec![
-                        OpenAIToolCall {
-                            id: "call_1".into(),
-                            call_type: "function".into(),
-                            function: OpenAIFunctionCall {
-                                name: "bash".into(),
-                                arguments: r#"{"command":"ls"}"#.into(),
-                            },
+                    tool_calls: Some(vec![OpenAIToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: OpenAIFunctionCall {
+                            name: "bash".into(),
+                            arguments: r#"{"command":"ls"}"#.into(),
                         },
-                    ]),
+                    }]),
                 },
                 finish_reason: Some("tool_calls".into()),
             }],

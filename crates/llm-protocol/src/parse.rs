@@ -228,7 +228,10 @@ mod tests {
                 assert_eq!(tool, "bash");
                 assert_eq!(params, serde_json::json!({"command": "ls"}));
             }
-            _ => panic!("expected ToolCall for backward compatibility, got {:?}", decision),
+            _ => panic!(
+                "expected ToolCall for backward compatibility, got {:?}",
+                decision
+            ),
         }
     }
 
