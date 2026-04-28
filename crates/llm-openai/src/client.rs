@@ -185,7 +185,13 @@ impl OpenAIClient {
 
         // Check for tool calls first.
         if let Some(tool_calls) = msg.tool_calls {
-            if let Some(tc) = tool_calls.into_iter().next() {
+            if tool_calls.is_empty() {
+                return Err(LLMError::InvalidResponse("empty tool_calls array".into()));
+            }
+
+            if tool_calls.len() == 1 {
+                // Single tool call — return ToolUse for backward compatibility
+                let tc = tool_calls.into_iter().next().unwrap();
                 let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(tc.function.arguments.clone()));
                 return Ok(LLMResponse::ToolUse {
@@ -193,6 +199,23 @@ impl OpenAIClient {
                     name: tc.function.name,
                     input,
                 });
+            } else {
+                // Multiple tool calls — return Mixed with all ToolUse blocks
+                let blocks: Vec<ContentBlock> = tool_calls
+                    .into_iter()
+                    .map(|tc| {
+                        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| {
+                                serde_json::Value::String(tc.function.arguments.clone())
+                            });
+                        ContentBlock::ToolUse {
+                            id: tc.id,
+                            name: tc.function.name,
+                            input,
+                        }
+                    })
+                    .collect();
+                return Ok(LLMResponse::Mixed { blocks });
             }
         }
 
@@ -238,6 +261,7 @@ impl lattice_core::LLMClient for OpenAIClient {
             messages,
             max_tokens: Some(self.max_tokens),
             tools,
+            stream: false, // Disable streaming to get complete JSON response
         };
 
         info!(
@@ -272,6 +296,24 @@ impl lattice_core::LLMClient for OpenAIClient {
             .await
             .map_err(|e| LLMError::RequestFailed(e.to_string()))?;
 
+        debug!("response body length: {} bytes", body.len());
+
+        // Check if body is empty
+        if body.is_empty() {
+            info!("received empty response body");
+            return Err(LLMError::InvalidResponse("empty response body".to_string()));
+        }
+
+        // Log first 500 chars for debugging
+        debug!(
+            "response body (first 500 chars): {}",
+            if body.len() > 500 {
+                &body[..500]
+            } else {
+                &body
+            }
+        );
+
         if !status.is_success() {
             if let Ok(err) = serde_json::from_str::<OpenAIError>(&body) {
                 return Err(LLMError::RequestFailed(err.error.message));
@@ -279,8 +321,11 @@ impl lattice_core::LLMClient for OpenAIClient {
             return Err(LLMError::RequestFailed(format!("HTTP {status}: {body}")));
         }
 
-        let response: OpenAIResponse =
-            serde_json::from_str(&body).map_err(|e| LLMError::InvalidResponse(e.to_string()))?;
+        let response: OpenAIResponse = serde_json::from_str(&body).map_err(|e| {
+            info!("failed to parse response body as JSON: {}", e);
+            info!("response body: {}", body);
+            LLMError::InvalidResponse(e.to_string())
+        })?;
 
         let llm_response = self.parse_response(response)?;
         lattice_llm_protocol::response_to_decision(llm_response)
@@ -388,6 +433,7 @@ mod tests {
             }],
             max_tokens: Some(1024),
             tools: vec![],
+            stream: false,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["model"], "gpt-4o");
@@ -562,5 +608,198 @@ mod tests {
         assert_eq!(result[0].content.as_deref(), Some("Be helpful."));
         assert_eq!(result[1].role, "user");
         assert_eq!(result[1].content.as_deref(), Some("hi"));
+    }
+
+    /// Test for Issue #27: Multiple parallel tool calls should return Mixed response
+    ///
+    /// This test verifies that when OpenAI returns multiple tool_calls,
+    /// we return LLMResponse::Mixed with all tool calls preserved.
+    #[test]
+    fn test_parse_response_with_multiple_tool_calls() {
+        let client = OpenAIClient::new("test-key", "gpt-4o");
+
+        // Simulate OpenAI response with 3 parallel tool calls
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![
+                        OpenAIToolCall {
+                            id: "call_1".into(),
+                            call_type: "function".into(),
+                            function: OpenAIFunctionCall {
+                                name: "bash".into(),
+                                arguments: r#"{"command":"cat file1.txt"}"#.into(),
+                            },
+                        },
+                        OpenAIToolCall {
+                            id: "call_2".into(),
+                            call_type: "function".into(),
+                            function: OpenAIFunctionCall {
+                                name: "bash".into(),
+                                arguments: r#"{"command":"cat file2.txt"}"#.into(),
+                            },
+                        },
+                        OpenAIToolCall {
+                            id: "call_3".into(),
+                            call_type: "function".into(),
+                            function: OpenAIFunctionCall {
+                                name: "bash".into(),
+                                arguments: r#"{"command":"cat file3.txt"}"#.into(),
+                            },
+                        },
+                    ]),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let result = client.parse_response(response).unwrap();
+
+        // Should return Mixed with all 3 tool calls
+        match result {
+            LLMResponse::Mixed { blocks } => {
+                assert_eq!(blocks.len(), 3);
+
+                match &blocks[0] {
+                    ContentBlock::ToolUse { id, name, input } => {
+                        assert_eq!(id, "call_1");
+                        assert_eq!(name, "bash");
+                        assert_eq!(input, &serde_json::json!({"command": "cat file1.txt"}));
+                    }
+                    _ => panic!("expected ToolUse block"),
+                }
+
+                match &blocks[1] {
+                    ContentBlock::ToolUse { id, name, .. } => {
+                        assert_eq!(id, "call_2");
+                        assert_eq!(name, "bash");
+                    }
+                    _ => panic!("expected ToolUse block"),
+                }
+
+                match &blocks[2] {
+                    ContentBlock::ToolUse { id, name, .. } => {
+                        assert_eq!(id, "call_3");
+                        assert_eq!(name, "bash");
+                    }
+                    _ => panic!("expected ToolUse block"),
+                }
+            }
+            _ => panic!(
+                "expected Mixed response with multiple tool calls, got {:?}",
+                result
+            ),
+        }
+    }
+
+    /// Test backward compatibility: single tool call should still return ToolUse
+    #[test]
+    fn test_parse_response_with_single_tool_call_returns_tool_use() {
+        let client = OpenAIClient::new("test-key", "gpt-4o");
+
+        // Response with single tool call
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![OpenAIToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: OpenAIFunctionCall {
+                            name: "bash".into(),
+                            arguments: r#"{"command":"ls"}"#.into(),
+                        },
+                    }]),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let result = client.parse_response(response).unwrap();
+
+        // Should return ToolUse for backward compatibility
+        match result {
+            LLMResponse::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "bash");
+                assert_eq!(input, serde_json::json!({"command": "ls"}));
+            }
+            _ => panic!("expected ToolUse for single tool call, got {:?}", result),
+        }
+    }
+
+    /// Test that empty tool_calls array returns error
+    #[test]
+    fn test_parse_response_with_empty_tool_calls() {
+        let client = OpenAIClient::new("test-key", "gpt-4o");
+
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![]),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let result = client.parse_response(response);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty tool_calls"));
+    }
+
+    /// Test that verifies we can detect when multiple tool calls are present.
+    ///
+    /// This test documents the current behavior and will help verify the fix.
+    #[test]
+    fn test_detect_multiple_tool_calls_dropped() {
+        let client = OpenAIClient::new("test-key", "gpt-4o");
+
+        // Response with 2 tool calls
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![
+                        OpenAIToolCall {
+                            id: "call_1".into(),
+                            call_type: "function".into(),
+                            function: OpenAIFunctionCall {
+                                name: "bash".into(),
+                                arguments: r#"{"command":"ls"}"#.into(),
+                            },
+                        },
+                        OpenAIToolCall {
+                            id: "call_2".into(),
+                            call_type: "function".into(),
+                            function: OpenAIFunctionCall {
+                                name: "bash".into(),
+                                arguments: r#"{"command":"pwd"}"#.into(),
+                            },
+                        },
+                    ]),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        // Parse the response - should return Mixed with both calls
+        let result = client.parse_response(response).unwrap();
+
+        match result {
+            LLMResponse::Mixed { blocks } => {
+                assert_eq!(blocks.len(), 2);
+            }
+            _ => panic!("expected Mixed with 2 tool calls, got {:?}", result),
+        }
     }
 }

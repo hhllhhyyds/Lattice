@@ -11,6 +11,9 @@ pub struct OpenAIRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<OpenAITool>,
+    /// Disable streaming to get a complete JSON response.
+    /// If true, the API returns SSE chunks instead of a single JSON object.
+    pub stream: bool,
 }
 
 /// A message in OpenAI format.

@@ -211,6 +211,107 @@ impl ControlLoop {
                     }
                     info!("tool call completed, continuing loop");
                 }
+                Decision::MultiToolCall { calls } => {
+                    info!(count = calls.len(), "LLM requested multiple tool calls");
+                    let parent_id = events.last().map(|e| e.event_id);
+
+                    // 1. Record all ToolCallRequested events
+                    let mut request_ids = Vec::new();
+                    for call in &calls {
+                        let req_event_id = self
+                            .store
+                            .append_event(
+                                session_id,
+                                EventPayload::ToolCallRequested {
+                                    tool: call.tool.clone(),
+                                    params: call.params.clone(),
+                                },
+                                Actor::LLM,
+                                parent_id,
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                        events.push(Event {
+                            event_id: req_event_id,
+                            session_id,
+                            timestamp: chrono::Utc::now(),
+                            actor: Actor::LLM,
+                            payload: EventPayload::ToolCallRequested {
+                                tool: call.tool.clone(),
+                                params: call.params.clone(),
+                            },
+                            parent_event_id: parent_id,
+                        });
+
+                        request_ids.push(req_event_id);
+                    }
+
+                    // 2. Execute all tools sequentially, recording results or errors
+                    for (call, req_event_id) in calls.iter().zip(request_ids) {
+                        info!("executing tool: {}", call.tool);
+
+                        match self.tools.execute(&call.tool, call.params.clone()).await {
+                            Ok(result) => {
+                                info!("tool execution succeeded: exit_code={}", result.exit_code);
+                                let result_event_id = self
+                                    .store
+                                    .append_event(
+                                        session_id,
+                                        EventPayload::ToolCallResult {
+                                            stdout: result.stdout.clone(),
+                                            stderr: result.stderr.clone(),
+                                            exit_code: result.exit_code,
+                                        },
+                                        Actor::Sandbox,
+                                        Some(req_event_id),
+                                    )
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                                events.push(Event {
+                                    event_id: result_event_id,
+                                    session_id,
+                                    timestamp: chrono::Utc::now(),
+                                    actor: Actor::Sandbox,
+                                    payload: EventPayload::ToolCallResult {
+                                        stdout: result.stdout,
+                                        stderr: result.stderr,
+                                        exit_code: result.exit_code,
+                                    },
+                                    parent_event_id: Some(req_event_id),
+                                });
+                            }
+                            Err(e) => {
+                                warn!("tool execution failed: {}", e);
+                                let error_str = e.to_string();
+                                let error_event_id = self
+                                    .store
+                                    .append_event(
+                                        session_id,
+                                        EventPayload::ToolCallError {
+                                            error: error_str.clone(),
+                                        },
+                                        Actor::Sandbox,
+                                        Some(req_event_id),
+                                    )
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                                events.push(Event {
+                                    event_id: error_event_id,
+                                    session_id,
+                                    timestamp: chrono::Utc::now(),
+                                    actor: Actor::Sandbox,
+                                    payload: EventPayload::ToolCallError { error: error_str },
+                                    parent_event_id: Some(req_event_id),
+                                });
+                            }
+                        }
+                    }
+
+                    info!(count = calls.len(), "all tool calls completed");
+                }
                 Decision::FinalAnswer { answer } => {
                     info!(?answer, "LLM final answer");
                     let event_id = self
@@ -264,7 +365,7 @@ mod tests {
     use async_trait::async_trait;
     use lattice_core::{
         Actor, Decision, Event, EventFilter, EventPayload, ExecutionResult, LLMClient, LLMError,
-        SessionId, ToolDescription,
+        SessionId, SessionStore, ToolDescription,
     };
 
     use lattice_core::ToolError;
@@ -422,7 +523,36 @@ mod tests {
     }
 
     fn make_tools() -> Arc<ToolSet> {
-        Arc::new(ToolSet::new())
+        let mut toolset = ToolSet::new();
+
+        // Add a noop tool for testing
+        struct NoopTool;
+        #[async_trait]
+        impl ToolExecutor for NoopTool {
+            fn description(&self) -> ToolDescription {
+                ToolDescription {
+                    name: "noop".into(),
+                    description: "A no-op tool for testing".into(),
+                    parameters_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                    }),
+                }
+            }
+            async fn execute(
+                &self,
+                _params: serde_json::Value,
+            ) -> Result<ExecutionResult, ToolError> {
+                Ok(ExecutionResult {
+                    stdout: "noop executed".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                })
+            }
+        }
+
+        toolset.register(NoopTool).unwrap();
+        Arc::new(toolset)
     }
 
     fn insert_test_session(store: &TestStore, session_id: SessionId) {
@@ -930,5 +1060,428 @@ mod tests {
 
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "done");
+    }
+
+    /// Test for Issue #27: MultiToolCall with all tools succeeding
+    #[tokio::test]
+    async fn test_multi_tool_call_all_success() {
+        use lattice_core::llm::ToolCallRequest;
+
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        // LLM returns MultiToolCall with 3 tools, then FinalAnswer
+        let decisions = vec![
+            Decision::MultiToolCall {
+                calls: vec![
+                    ToolCallRequest {
+                        id: "call_1".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_2".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_3".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                ],
+            },
+            Decision::FinalAnswer {
+                answer: "all done".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::clone(&store_arc),
+            llm,
+            tools,
+            "prompt".into(),
+            10,
+        );
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "all done");
+
+        // Verify all events were recorded
+        let session_events = store_arc
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        // Should have: initial + 3 ToolCallRequested + 3 ToolCallResult + FinalAnswer
+        assert!(
+            session_events.len() >= 8,
+            "Expected at least 8 events, got {}",
+            session_events.len()
+        );
+
+        // Verify all 3 ToolCallRequested events
+        let requested_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallRequested { .. }))
+            .count();
+        assert_eq!(requested_count, 3, "Expected 3 ToolCallRequested events");
+
+        // Verify all 3 ToolCallResult events
+        let result_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallResult { .. }))
+            .count();
+        assert_eq!(result_count, 3, "Expected 3 ToolCallResult events");
+    }
+
+    /// Test for Issue #27: MultiToolCall with partial failures
+    #[tokio::test]
+    async fn test_multi_tool_call_partial_failure() {
+        use lattice_core::llm::ToolCallRequest;
+
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        // LLM returns MultiToolCall: tool1 (success), tool2 (fail), tool3 (success)
+        let decisions = vec![
+            Decision::MultiToolCall {
+                calls: vec![
+                    ToolCallRequest {
+                        id: "call_1".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_2".into(),
+                        tool: "nonexistent".into(), // This will fail
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_3".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                ],
+            },
+            Decision::FinalAnswer {
+                answer: "partial success".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::clone(&store_arc),
+            llm,
+            tools,
+            "prompt".into(),
+            10,
+        );
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "partial success");
+
+        // Verify events were recorded
+        let session_events = store_arc
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        // Should have: initial + 3 ToolCallRequested + 2 ToolCallResult + 1 ToolCallError + FinalAnswer
+        assert!(session_events.len() >= 8, "Expected at least 8 events");
+
+        // Verify 3 ToolCallRequested events
+        let requested_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallRequested { .. }))
+            .count();
+        assert_eq!(requested_count, 3);
+
+        // Verify 2 ToolCallResult events (call_1 and call_3 succeed)
+        let result_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallResult { .. }))
+            .count();
+        assert_eq!(result_count, 2);
+
+        // Verify 1 ToolCallError event (call_2 fails)
+        let error_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallError { .. }))
+            .count();
+        assert_eq!(error_count, 1);
+    }
+
+    /// Test for Issue #27: MultiToolCall with all tools failing
+    #[tokio::test]
+    async fn test_multi_tool_call_all_failure() {
+        use lattice_core::llm::ToolCallRequest;
+
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        // LLM returns MultiToolCall with all nonexistent tools
+        let decisions = vec![
+            Decision::MultiToolCall {
+                calls: vec![
+                    ToolCallRequest {
+                        id: "call_1".into(),
+                        tool: "nonexistent1".into(),
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_2".into(),
+                        tool: "nonexistent2".into(),
+                        params: serde_json::json!({}),
+                    },
+                ],
+            },
+            Decision::FinalAnswer {
+                answer: "all failed".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::clone(&store_arc),
+            llm,
+            tools,
+            "prompt".into(),
+            10,
+        );
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "all failed");
+
+        // Verify events were recorded
+        let session_events = store_arc
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        // Should have: initial + 2 ToolCallRequested + 2 ToolCallError + FinalAnswer
+        assert!(session_events.len() >= 6);
+
+        // Verify 2 ToolCallRequested events
+        let requested_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallRequested { .. }))
+            .count();
+        assert_eq!(requested_count, 2);
+
+        // Verify 0 ToolCallResult events
+        let result_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallResult { .. }))
+            .count();
+        assert_eq!(result_count, 0);
+
+        // Verify 2 ToolCallError events
+        let error_count = session_events
+            .iter()
+            .filter(|e| matches!(e.payload, EventPayload::ToolCallError { .. }))
+            .count();
+        assert_eq!(error_count, 2);
+    }
+
+    /// Test for Issue #27: MultiToolCall event ordering
+    #[tokio::test]
+    async fn test_multi_tool_call_event_ordering() {
+        use lattice_core::llm::ToolCallRequest;
+
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        let decisions = vec![
+            Decision::MultiToolCall {
+                calls: vec![
+                    ToolCallRequest {
+                        id: "call_1".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                    ToolCallRequest {
+                        id: "call_2".into(),
+                        tool: "noop".into(),
+                        params: serde_json::json!({}),
+                    },
+                ],
+            },
+            Decision::FinalAnswer {
+                answer: "done".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let control_loop = crate::ControlLoop::with_options(
+            Arc::clone(&store_arc),
+            llm,
+            tools,
+            "prompt".into(),
+            10,
+        );
+
+        control_loop.run(session_id).await.unwrap();
+
+        // Verify event ordering: all requests first, then all results
+        let session_events = store_arc
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        let mut request_indices = Vec::new();
+        let mut result_indices = Vec::new();
+
+        for (i, event) in session_events.iter().enumerate() {
+            match &event.payload {
+                EventPayload::ToolCallRequested { .. } => request_indices.push(i),
+                EventPayload::ToolCallResult { .. } => result_indices.push(i),
+                _ => {}
+            }
+        }
+
+        // Verify we have 2 requests and 2 results
+        assert_eq!(request_indices.len(), 2);
+        assert_eq!(result_indices.len(), 2);
+
+        // Verify all requests come before all results
+        // Expected order: [req1, req2, result1, result2]
+        assert!(
+            request_indices[0] < result_indices[0],
+            "First request should come before first result"
+        );
+        assert!(
+            request_indices[1] < result_indices[0],
+            "Second request should come before first result"
+        );
+        assert!(
+            request_indices[1] < result_indices[1],
+            "Second request should come before second result"
+        );
+    }
+
+    /// Test for Issue #27: Empty MultiToolCall
+    #[tokio::test]
+    async fn test_multi_tool_call_empty() {
+        let session_id = SessionId::new_v4();
+        let store = TestStore::new();
+        store.insert_session(
+            session_id,
+            vec![Event {
+                event_id: lattice_core::EventId::new_v4(),
+                session_id,
+                timestamp: chrono::Utc::now(),
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "test".into(),
+                },
+                parent_event_id: None,
+            }],
+        );
+
+        // LLM returns empty MultiToolCall (edge case)
+        let decisions = vec![
+            Decision::MultiToolCall { calls: vec![] },
+            Decision::FinalAnswer {
+                answer: "nothing to do".into(),
+            },
+        ];
+
+        let llm = Arc::new(TestLLM::with_sequence(decisions));
+        let tools = make_tools();
+
+        let control_loop =
+            crate::ControlLoop::with_options(Arc::new(store), llm, tools, "prompt".into(), 10);
+
+        let result = control_loop.run(session_id).await.unwrap();
+        assert_eq!(result, "nothing to do");
+
+        // Verify no tool events were recorded
+        let store_ref = Arc::clone(&control_loop.store);
+        let session_events = store_ref
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap();
+
+        let tool_event_count = session_events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.payload,
+                    EventPayload::ToolCallRequested { .. }
+                        | EventPayload::ToolCallResult { .. }
+                        | EventPayload::ToolCallError { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            tool_event_count, 0,
+            "Empty MultiToolCall should not create any tool events"
+        );
     }
 }
