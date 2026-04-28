@@ -6,3 +6,4 @@ target/
 .omc/
 .env
 .claude/
+debug_files/
