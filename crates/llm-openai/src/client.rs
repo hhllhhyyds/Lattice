@@ -428,6 +428,7 @@ mod tests {
             }],
             max_tokens: Some(1024),
             tools: vec![],
+            stream: false,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["model"], "gpt-4o");
