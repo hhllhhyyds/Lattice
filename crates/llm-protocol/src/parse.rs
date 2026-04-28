@@ -11,7 +11,8 @@ use crate::response::LLMResponse;
 /// # Rules
 /// - `Text` → `FinalAnswer`
 /// - `ToolUse` → `ToolCall`
-/// - `Mixed` with any `ToolUse` → first `ToolCall`
+/// - `Mixed` with single `ToolUse` → `ToolCall` (backward compatible)
+/// - `Mixed` with multiple `ToolUse` → `MultiToolCall`
 /// - `Mixed` with only `Text` → `FinalAnswer` (concatenated)
 /// - `Error` → `LLMError::InvalidResponse`
 pub fn response_to_decision(response: LLMResponse) -> Result<Decision, LLMError> {
@@ -24,32 +25,54 @@ pub fn response_to_decision(response: LLMResponse) -> Result<Decision, LLMError>
         }),
 
         LLMResponse::Mixed { blocks } => {
-            // Look for the first ToolUse block.
-            for block in &blocks {
-                if let ContentBlock::ToolUse { name, input, .. } = block {
-                    return Ok(Decision::ToolCall {
-                        tool: name.clone(),
-                        params: input.clone(),
-                    });
-                }
-            }
-
-            // No tool use — concatenate all text blocks into a final answer.
-            let text: String = blocks
+            // Collect all ToolUse blocks
+            let tool_uses: Vec<_> = blocks
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::ToolUse { id, name, input } => {
+                        Some((id.clone(), name.clone(), input.clone()))
+                    }
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect();
 
-            if text.is_empty() {
-                Err(LLMError::InvalidResponse(
-                    "mixed response contained no text or tool_use blocks".into(),
-                ))
+            if tool_uses.is_empty() {
+                // No tool use — concatenate all text blocks into a final answer.
+                let text: String = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                if text.is_empty() {
+                    Err(LLMError::InvalidResponse(
+                        "mixed response contained no text or tool_use blocks".into(),
+                    ))
+                } else {
+                    Ok(Decision::FinalAnswer { answer: text })
+                }
+            } else if tool_uses.len() == 1 {
+                // Single tool use — return ToolCall for backward compatibility
+                let (_, name, input) = tool_uses.into_iter().next().unwrap();
+                Ok(Decision::ToolCall {
+                    tool: name,
+                    params: input,
+                })
             } else {
-                Ok(Decision::FinalAnswer { answer: text })
+                // Multiple tool uses — return MultiToolCall
+                use lattice_core::llm::ToolCallRequest;
+                let calls = tool_uses
+                    .into_iter()
+                    .map(|(id, name, input)| ToolCallRequest {
+                        id,
+                        tool: name,
+                        params: input,
+                    })
+                    .collect();
+                Ok(Decision::MultiToolCall { calls })
             }
         }
 

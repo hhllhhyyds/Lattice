@@ -185,7 +185,15 @@ impl OpenAIClient {
 
         // Check for tool calls first.
         if let Some(tool_calls) = msg.tool_calls {
-            if let Some(tc) = tool_calls.into_iter().next() {
+            if tool_calls.is_empty() {
+                return Err(LLMError::InvalidResponse(
+                    "empty tool_calls array".into(),
+                ));
+            }
+
+            if tool_calls.len() == 1 {
+                // Single tool call — return ToolUse for backward compatibility
+                let tc = tool_calls.into_iter().next().unwrap();
                 let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(tc.function.arguments.clone()));
                 return Ok(LLMResponse::ToolUse {
@@ -193,6 +201,23 @@ impl OpenAIClient {
                     name: tc.function.name,
                     input,
                 });
+            } else {
+                // Multiple tool calls — return Mixed with all ToolUse blocks
+                let blocks: Vec<ContentBlock> = tool_calls
+                    .into_iter()
+                    .map(|tc| {
+                        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| {
+                                serde_json::Value::String(tc.function.arguments.clone())
+                            });
+                        ContentBlock::ToolUse {
+                            id: tc.id,
+                            name: tc.function.name,
+                            input,
+                        }
+                    })
+                    .collect();
+                return Ok(LLMResponse::Mixed { blocks });
             }
         }
 

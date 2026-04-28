@@ -365,7 +365,7 @@ mod tests {
     use async_trait::async_trait;
     use lattice_core::{
         Actor, Decision, Event, EventFilter, EventPayload, ExecutionResult, LLMClient, LLMError,
-        SessionId, SessionStore, ToolDescription,
+        SessionId, ToolDescription,
     };
 
     use lattice_core::ToolError;
@@ -523,36 +523,7 @@ mod tests {
     }
 
     fn make_tools() -> Arc<ToolSet> {
-        let mut toolset = ToolSet::new();
-
-        // Add a noop tool for testing
-        struct NoopTool;
-        #[async_trait]
-        impl ToolExecutor for NoopTool {
-            fn description(&self) -> ToolDescription {
-                ToolDescription {
-                    name: "noop".into(),
-                    description: "A no-op tool for testing".into(),
-                    parameters_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {},
-                    }),
-                }
-            }
-            async fn execute(
-                &self,
-                _params: serde_json::Value,
-            ) -> Result<ExecutionResult, ToolError> {
-                Ok(ExecutionResult {
-                    stdout: "noop executed".into(),
-                    stderr: String::new(),
-                    exit_code: 0,
-                })
-            }
-        }
-
-        toolset.register(NoopTool).unwrap();
-        Arc::new(toolset)
+        Arc::new(ToolSet::new())
     }
 
     fn insert_test_session(store: &TestStore, session_id: SessionId) {
@@ -1112,7 +1083,7 @@ mod tests {
         let llm = Arc::new(TestLLM::with_sequence(decisions));
         let tools = make_tools();
 
-        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
+        let store_arc = Arc::new(store);
         let control_loop = crate::ControlLoop::with_options(
             Arc::clone(&store_arc),
             llm,
@@ -1198,20 +1169,15 @@ mod tests {
         let llm = Arc::new(TestLLM::with_sequence(decisions));
         let tools = make_tools();
 
-        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
-        let control_loop = crate::ControlLoop::with_options(
-            Arc::clone(&store_arc),
-            llm,
-            tools,
-            "prompt".into(),
-            10,
-        );
+        let control_loop =
+            crate::ControlLoop::with_options(Arc::new(store), llm, tools, "prompt".into(), 10);
 
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "partial success");
 
         // Verify events were recorded
-        let session_events = store_arc
+        let store_ref = Arc::clone(&control_loop.store);
+        let session_events = store_ref
             .get_events(session_id, &EventFilter::default())
             .await
             .unwrap();
@@ -1286,20 +1252,15 @@ mod tests {
         let llm = Arc::new(TestLLM::with_sequence(decisions));
         let tools = make_tools();
 
-        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
-        let control_loop = crate::ControlLoop::with_options(
-            Arc::clone(&store_arc),
-            llm,
-            tools,
-            "prompt".into(),
-            10,
-        );
+        let control_loop =
+            crate::ControlLoop::with_options(Arc::new(store), llm, tools, "prompt".into(), 10);
 
         let result = control_loop.run(session_id).await.unwrap();
         assert_eq!(result, "all failed");
 
         // Verify events were recorded
-        let session_events = store_arc
+        let store_ref = Arc::clone(&control_loop.store);
+        let session_events = store_ref
             .get_events(session_id, &EventFilter::default())
             .await
             .unwrap();
@@ -1373,19 +1334,14 @@ mod tests {
         let llm = Arc::new(TestLLM::with_sequence(decisions));
         let tools = make_tools();
 
-        let store_arc: Arc<dyn SessionStore> = Arc::new(store);
-        let control_loop = crate::ControlLoop::with_options(
-            Arc::clone(&store_arc),
-            llm,
-            tools,
-            "prompt".into(),
-            10,
-        );
+        let control_loop =
+            crate::ControlLoop::with_options(Arc::new(store), llm, tools, "prompt".into(), 10);
 
         control_loop.run(session_id).await.unwrap();
 
         // Verify event ordering: all requests first, then all results
-        let session_events = store_arc
+        let store_ref = Arc::clone(&control_loop.store);
+        let session_events = store_ref
             .get_events(session_id, &EventFilter::default())
             .await
             .unwrap();
