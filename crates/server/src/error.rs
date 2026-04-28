@@ -21,6 +21,8 @@ pub enum AppError {
     SessionNotFound(lattice_core::SessionId),
     /// Request was malformed or invalid.
     InvalidRequest(String),
+    /// Conflict: resource already exists or operation not allowed.
+    Conflict(String),
     /// Internal server error.
     InternalError(String),
 }
@@ -30,6 +32,7 @@ impl std::fmt::Display for AppError {
         match self {
             Self::SessionNotFound(id) => write!(f, "Session with id {id} does not exist"),
             Self::InvalidRequest(msg) => write!(f, "{msg}"),
+            Self::Conflict(msg) => write!(f, "{msg}"),
             Self::InternalError(msg) => write!(f, "{msg}"),
         }
     }
@@ -44,6 +47,7 @@ impl IntoResponse for AppError {
                 format!("Session with id {id} does not exist"),
             ),
             Self::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, "invalid_request", msg.clone()),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, "conflict", msg.clone()),
             Self::InternalError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -119,8 +123,28 @@ mod tests {
             "bad input"
         );
         assert_eq!(
+            AppError::Conflict("already running".into()).to_string(),
+            "already running"
+        );
+        assert_eq!(
             AppError::InternalError("something went wrong".into()).to_string(),
             "something went wrong"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_conflict_into_response() {
+        let error = AppError::Conflict("Session already has a running task".into());
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "conflict");
+        assert_eq!(
+            json["error"]["message"],
+            "Session already has a running task"
         );
     }
 }

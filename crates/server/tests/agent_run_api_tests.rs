@@ -52,7 +52,9 @@ async fn post_message_returns_202_accepted() {
                 .method("POST")
                 .uri(format!("/v1/sessions/{}/messages", session_id))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"list files in current directory"}"#))
+                .body(Body::from(
+                    r#"{"content":"list files in current directory"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -357,9 +359,7 @@ async fn get_status_returns_running_after_message_submission() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["sessionId"], session_id);
     // Status should be "running" or "completed" depending on timing.
-    assert!(
-        json["runStatus"] == "running" || json["runStatus"] == "completed"
-    );
+    assert!(json["runStatus"] == "running" || json["runStatus"] == "completed");
 }
 
 #[tokio::test]
