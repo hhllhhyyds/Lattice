@@ -295,6 +295,18 @@ impl lattice_core::LLMClient for OpenAIClient {
             .await
             .map_err(|e| LLMError::RequestFailed(e.to_string()))?;
 
+        debug!("response body length: {} bytes", body.len());
+
+        // Check if body is empty
+        if body.is_empty() {
+            info!("received empty response body");
+            return Err(LLMError::InvalidResponse("empty response body".to_string()));
+        }
+
+        // Log first 500 chars for debugging
+        debug!("response body (first 500 chars): {}",
+            if body.len() > 500 { &body[..500] } else { &body });
+
         if !status.is_success() {
             if let Ok(err) = serde_json::from_str::<OpenAIError>(&body) {
                 return Err(LLMError::RequestFailed(err.error.message));
@@ -303,7 +315,11 @@ impl lattice_core::LLMClient for OpenAIClient {
         }
 
         let response: OpenAIResponse =
-            serde_json::from_str(&body).map_err(|e| LLMError::InvalidResponse(e.to_string()))?;
+            serde_json::from_str(&body).map_err(|e| {
+                info!("failed to parse response body as JSON: {}", e);
+                info!("response body: {}", body);
+                LLMError::InvalidResponse(e.to_string())
+            })?;
 
         let llm_response = self.parse_response(response)?;
         lattice_llm_protocol::response_to_decision(llm_response)
