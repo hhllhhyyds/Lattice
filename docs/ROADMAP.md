@@ -46,7 +46,7 @@
 | 13 | [Server crate 骨架 + 基础路由](../tasks/13-server-skeleton.md) | `feat/server-skeleton` | ✅ |
 | 14 | [会话管理 API](../tasks/14-session-api.md) | `feat/session-api` | ✅ |
 | 15 | [工具系统：ToolExecutor + ToolSet + 标准工具库](../tasks/15-tool-system.md) | `feat/tool-system` | ✅ |
-| 16 | [任务提交与 Agent 执行 API](../tasks/16-agent-run-api.md) | `feat/agent-run-api` | ⬜ |
+| 16 | [任务提交与 Agent 执行 API](../tasks/16-agent-run-api.md) | `feat/agent-run-api` | ✅ |
 | 17 | [SSE 实时事件流](../tasks/17-sse-stream.md) | `feat/sse-stream` | ⬜ |
 | 18 | [配置管理与多 Provider 支持](../tasks/18-config-provider.md) | `feat/config-provider` | ⬜ |
 | 19 | [Docker 化独立部署](../tasks/19-docker-deploy.md) | `feat/docker-deploy` | ⬜ |
