@@ -12,11 +12,30 @@ Lattice 是一个 Rust 编写的 Agent 元框架，灵感来自 [Anthropic Manag
 
 ## 架构
 
-三个核心抽象：
+### 演进路线（详细见 [ROADMAP](docs/ROADMAP.md)）
 
-- **Session** — 不可变的事件溯源日志，Agent 的持久化记忆
-- **ControlLoop** — Agent 的大脑，负责调用 LLM 并路由决策
-- **Sandbox** — Agent 的双手，隔离的工具执行环境
+| 轮次 | 内容 | 状态 |
+|---|---|---|
+| 第一轮 | MVP：core traits + MemoryStore + LocalSandbox + ControlLoop | ✅ 已完成 |
+| 第二轮 | 真实 LLM 接入：LLM protocol + Anthropic + OpenAI | ✅ 已完成 |
+| 第三轮 | 真实 LLM 验证：端到端跑通 | ✅ 已完成 |
+| 第四轮 | HTTP API 层：REST API + SSE 实时事件流 + Docker 部署 | 🚧 进行中 |
+| 第五轮 | Skill 系统：ExecutionContext + Session Tree + SkillTool + 动态加载 | 📋 规划中 |
+| 第六轮 | 记忆与规划：RuntimeState + Planner trait + LongTermMemory | 📋 规划中 |
+
+### 核心抽象
+
+- **Session（记忆层）** — 不可变的事件溯源日志，append-only，保证可追溯性
+- **ControlLoop（执行层）** — Agent 的大脑，调用 LLM 并路由决策
+- **Sandbox（执行层）** — Agent 的双手，隔离的工具执行环境
+
+三层工具体系：
+
+- **Layer 1** — `lattice-core`：纯接口（`ToolExecutor` trait）
+- **Layer 2** — `lattice-tools`：标准工具库（Bash、File、Glob、Grep、HTTP）
+- **Layer 3** — 应用层注入：自定义工具、MCP 桥接、Skill 工具集
+
+**Skill 系统**（第五轮）遵循 [Anthropic Agent Skills](https://www.agentskills.com) 开放标准，skill 作为普通工具调用，背后运行完整子 ControlLoop，实现渐进式披露三层加载。
 
 ## 快速开始
 
@@ -74,11 +93,11 @@ curl http://localhost:3000/health
 
 ## LLM Provider 支持
 
-| Provider | 包 | 状态 |
-|----------|-----|------|
-| Anthropic Claude | `lattice-llm-anthropic` | ✅ |
-| OpenAI 兼容 | `lattice-llm-openai` | ✅ |
-| 自定义 base URL | via `LATTICE_API_BASE` | ✅ |
+| Provider         | 包                      | 状态 |
+| ---------------- | ----------------------- | ---- |
+| Anthropic Claude | `lattice-llm-anthropic` | ✅    |
+| OpenAI 兼容      | `lattice-llm-openai`    | ✅    |
+| 自定义 base URL  | via `LATTICE_API_BASE`  | ✅    |
 
 ## 文档
 

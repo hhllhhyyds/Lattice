@@ -12,111 +12,73 @@ Lattice 的架构灵感来自 Anthropic 的 Managed Agents 博客（*Scaling Man
 ## 三个核心抽象
 
 ```
-┌──────────────────────────────────────────────┐
-│              ControlLoop (大脑)                │
-│  依赖两个 trait:                               │
-│  - SessionStore                               │
-│  - LLMClient                                  │
-│  持有 ToolSet（工具注册表）                     │
-└──────┬───────────────┬───────────────┬─────────┘
-       │               │               │
-  ┌────▼─────┐   ┌─────▼─────┐  ┌─────▼───────────┐
-  │ Session  │   │ LLMClient │  │   ToolSet       │
-  │  Store   │   │           │  │ (注册表 + 执行) │
-  │ (trait)  │   │ (trait)   │  │ (可组合实现)   │
-  └──────────┘   └───────────┘  └───────┬─────────┘
-                                        │ ToolExecutor trait
-                                  ┌─────▼─────────┐
-                                  │ BashTool      │
-                                  │ (或任意工具)  │
-                                  │  └─ Sandbox  │
-                                  └──────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                 ControlLoop（Agent 的大脑）                   │
+│  持有 ToolSet（工具注册表），唯一有权调用 LLM                 │
+│  依赖两个 trait:                                            │
+│    - SessionStore（记忆层）                                  │
+│    - LLMClient（推理层）                                    │
+└──────────┬──────────────────────────────────┬──────────────┘
+           │                                  │
+      ┌────▼──────┐                    ┌─────▼───────┐
+      │ Session   │                    │  ToolSet    │
+      │  Store    │                    │  (Layer 1-3)│
+      │ (trait)   │                    └──────┬──────┘
+      └───────────┘                            │
+                                        ┌──────▼──────┐
+                                        │ ToolExecutor │
+                                        │  (trait)    │
+                                        └──────┬──────┘
+                                               │
+                                        ┌──────▼──────────────┐
+                                        │ BashTool / FileTool  │
+                                        │ / GlobTool / MCP ... │
+                                        └─────────────────────┘
 ```
 
-### 工具三层体系
+**三层工具体系**（Layer 1-3 由 `ToolSet` 统一调用，ControlLoop 不区分沙箱执行还是进程内执行）：
 
-Lattice 的工具系统分为三层：
+- **Layer 1（`lattice-core`）**：纯接口——`ToolExecutor` trait
+- **Layer 2（`lattice-tools`）**：标准工具库——BashTool、FileTool 等
+- **Layer 3（应用层）**：用户注入——MCP 桥接、自定义工具、Skill 工具集
 
-1. **Layer 1（core）**：定义 `ToolExecutor` trait——所有工具的统一接口
-2. **Layer 2（lattice-tools）**：`ToolSet` 注册表 + 标准工具实现（BashTool）
-3. **Layer 3（应用层）**：注入自定义工具实现
+---
 
-ControlLoop 通过 `ToolSet` 统一调用工具，不区分工具背后是沙箱执行还是进程内执行。
-
-### 1. Session（会话）—— 不可变事件日志
+## 1. Session（会话）—— 不可变事件日志
 
 **定义**：Agent 运行期间产生的所有事件的不可变、仅追加、持久化序列。
 
 **不是什么**：
-- 不是 LLM 的对话历史
+- 不是 LLM 的对话历史（那是短期记忆层，规划中）
 - 不是上下文窗口
 - 不可修改、不可删除
 
-**事件结构**：
+### 事件类型
 
 ```rust
-/// 事件唯一标识
-pub type EventId = Uuid;
-
-/// 事件时间戳
-pub type Timestamp = chrono::DateTime<chrono::Utc>;
-
-/// 产生事件的角色
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
-pub enum Actor {
-    System,
-    LLM,
-    Harness,
-    Sandbox,
-}
-
 /// 事件负载
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum EventPayload {
-    /// 会话创建
     SessionCreated,
 
-    /// 用户输入任务
     UserMessage { content: String },
 
-    /// LLM 的思考过程
     Thinking { reasoning: String },
 
-    /// LLM 决定调用工具
-    ToolCallRequested {
-        tool: String,
-        params: serde_json::Value,
-    },
+    ToolCallRequested { tool: String, params: serde_json::Value },
 
-    /// 工具调用结果
-    ToolCallResult {
-        stdout: String,
-        stderr: String,
-        exit_code: i32,
-    },
+    ToolCallResult { stdout: String, stderr: String, exit_code: i32 },
 
-    /// 工具调用失败
     ToolCallError { error: String },
 
-    /// LLM 给出最终答案
     FinalAnswer { answer: String },
 
-    /// 会话状态变更
     StateChange { from: String, to: String },
 
-    /// Skill 被触发执行 —— 记录在父 session 中
-    SkillInvoked {
-        skill_name: String,
-        child_session_id: SessionId,
-    },
-
-    /// Skill 执行完成 —— 记录在父 session 中
-    SkillCompleted {
-        skill_name: String,
-        child_session_id: SessionId,
-    },
+    // — Skill 系统扩展 —
+    SkillInvoked { skill_name: String, child_session_id: SessionId },
+    SkillCompleted { skill_name: String, child_session_id: SessionId },
 }
 
 /// 一个不可变事件
@@ -131,15 +93,13 @@ pub struct Event {
 }
 ```
 
-**SessionStore trait**：
+### SessionStore trait
 
 ```rust
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// 创建一个新会话，返回 session_id
     async fn create_session(&self) -> Result<SessionId, StoreError>;
 
-    /// 追加事件（仅追加，不可修改）
     async fn append_event(
         &self,
         session_id: SessionId,
@@ -148,74 +108,69 @@ pub trait SessionStore: Send + Sync {
         parent_event_id: Option<EventId>,
     ) -> Result<EventId, StoreError>;
 
-    /// Retrieve events for a session, optionally filtered.
     async fn get_events(
         &self,
         session_id: SessionId,
         filter: &EventFilter,
     ) -> Result<Vec<Event>, StoreError>;
 
-    /// Get the latest event id for a session.
     async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError>;
 
-    /// Create a child session under the given parent.
-    ///
-    /// The child session is independent — its events are stored in the
-    /// returned child store. The parent store records the relationship
-    /// for `child_sessions()` queries.
+    // — Skill 系统扩展 —
     async fn create_child_session(
         &self,
         parent_session_id: SessionId,
         skill_name: &str,
     ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError>;
 
-    /// List all child sessions for a given parent.
     async fn child_sessions(
         &self,
         parent_session_id: SessionId,
     ) -> Result<Vec<ChildSessionInfo>, StoreError>;
 }
-
-/// Information about a child session (returned by SessionStore::child_sessions).
-#[derive(Debug, Clone)]
-pub struct ChildSessionInfo {
-    pub session_id: SessionId,
-    pub store: Arc<dyn SessionStore>,
-    pub skill_name: String,
-    pub created_at: Timestamp,
-}
 ```
 
-### 2. ControlLoop（控制循环）—— Agent 的大脑
+### Session Tree（Skill 系统）
+
+Session 支持树形扩展：父 session 调用 skill 时创建子 session，子 session 拥有独立的 SessionStore。父 session 的事件日志记录 `SkillInvoked`/`SkillCompleted` 事件，携带子 session ID，供可观测性查询。
+
+```
+Root SessionStore
+├── session-001 (meta agent)
+│   └── SkillInvoked → session-002 (skill: web-research, 独立 MemoryStore)
+└── session-003 (另一个 meta agent)
+```
+
+---
+
+## 2. ControlLoop（控制循环）—— Agent 的大脑
 
 **定义**：唯一有权调用 LLM 的组件。负责加载事件历史、构建提示、解析 LLM 决策、路由工具调用。
 
 **关键特性**：
 - **无状态**：不持有持久状态，所有状态从 SessionStore 恢复
-- **可崩溃恢复**：进程崩溃后，用同一个 session_id 重新创建 ControlLoop，从事件日志断点继续
-- **工具委托**：通过 ToolSet 执行工具调用，记录结果或错误事件
+- **可崩溃恢复**：用同一个 session_id 重新创建 ControlLoop，从事件日志断点继续
+- **深度感知**：通过 `depth` 字段追踪 skill 嵌套层级，防无限递归
 
-**决策循环**：
+### 决策循环
 
 ```
 loop {
     1. 从 SessionStore 加载事件历史
-    2. 从 ToolSet 获取可用工具描述，构建 LLM 提示
-    3. 调用 LLMClient.decide()
-    4. 记录决策事件
-    5. match 决策:
+    2. 从 ToolSet 获取工具描述，调用 LLM
+    3. 记录决策事件
+    4. match 决策:
        - FinalAnswer → 记录结果，退出循环
-       - Thinking → 继续循环
-       - ToolCall → 通过 ToolSet.execute(tool, params) 执行，记录结果/错误，继续循环
+       - Thinking   → 继续循环
+       - ToolCall   → 构造 ExecutionContext，ToolSet.execute()，记录结果/错误，继续循环
 }
 ```
 
-**LLMClient trait**：
+### LLMClient trait
 
 ```rust
 #[async_trait]
 pub trait LLMClient: Send + Sync {
-    /// 基于事件历史和可用工具做出决策
     async fn decide(
         &self,
         history: &[Event],
@@ -224,7 +179,6 @@ pub trait LLMClient: Send + Sync {
     ) -> Result<Decision, LLMError>;
 }
 
-/// LLM 的决策
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Decision {
@@ -234,24 +188,40 @@ pub enum Decision {
 }
 ```
 
-### 3. Sandbox（沙箱）—— Agent 的双手
+### ExecutionContext
+
+```rust
+/// Maximum allowed skill nesting depth. A meta agent has depth=0;
+/// its direct skill children have depth=1, and so on.
+pub const MAX_SKILL_DEPTH: u32 = 8;
+
+/// Execution context passed to every tool invocation.
+pub struct ExecutionContext {
+    pub session_id: SessionId,
+    pub trigger_event_id: EventId,
+    pub store: Arc<dyn SessionStore>,
+    pub depth: u32,
+}
+```
+
+---
+
+## 3. Sandbox（沙箱）—— Agent 的双手
 
 **定义**：隔离的工具执行环境，按需创建，可替换。
 
 **关键特性**：
 - **隔离**：沙箱内的代码无法访问框架内部或凭据
-- **可替换**：崩溃了换一个新的，ControlLoop 视之为一次工具调用失败
-- **按需启动**：只在 LLM 真正需要执行工具时才创建
-- **跨平台**：LocalSandbox 根据操作系统自动选择合适的 shell
+- **可替换**：崩溃后换一个，ControlLoop 视之为一次工具调用失败
+- **跨平台**：`LocalSandbox` 根据 OS 自动选择 shell
   - Unix/Linux/macOS: `sh -c`
   - Windows: `cmd.exe /C`
 
-**Sandbox trait**：
+### Sandbox trait
 
 ```rust
 #[async_trait]
 pub trait Sandbox: Send + Sync {
-    /// 执行命令
     async fn execute(
         &self,
         command: &str,
@@ -267,24 +237,17 @@ pub struct ExecutionResult {
 }
 ```
 
-**ToolExecutor trait**：
+---
+
+## 工具系统
+
+### ToolExecutor trait（Layer 1）
 
 ```rust
-/// Execution context passed to every tool invocation.
-pub struct ExecutionContext {
-    pub session_id: SessionId,
-    pub trigger_event_id: EventId,
-    pub store: Arc<dyn SessionStore>,
-    pub depth: u32,   // 0 = meta agent, 1 = direct skill child, etc.
-}
-pub const MAX_SKILL_DEPTH: u32 = 8;
-
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    /// Return the tool description for LLM consumption.
     fn description(&self) -> ToolDescription;
 
-    /// Execute the tool with the given parameters and execution context.
     async fn execute(
         &self,
         params: serde_json::Value,
@@ -293,12 +256,26 @@ pub trait ToolExecutor: Send + Sync {
 }
 ```
 
-**ToolSet**：
+### ToolSet（Layer 1-3 统一入口）
 
 ```rust
+pub struct ToolSet {
+    tools: HashMap<String, Box<dyn ToolExecutor>>,
+}
+
 impl ToolSet {
+    pub fn new() -> Self { ... }
+
+    #[cfg(feature = "bash")]
+    pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self { ... }
+
+    /// Register a tool. Error if name conflicts.
     pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> { ... }
+
+    /// All tool descriptions for LLM consumption.
     pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
+
+    /// Route a tool call to the correct executor.
     pub async fn execute(
         &self,
         name: &str,
@@ -308,14 +285,19 @@ impl ToolSet {
 }
 ```
 
-## 数据流与生命周期
+### ToolSet 与 SandboxRouter 的关系
 
-完整的一次 Agent 任务执行：
+`ToolSet` 统一了工具描述和工具执行两个职责，取代了之前的 `Vec<ToolDescription>` + `SandboxRouter` 分离模式。
+
+`SandboxRouter` trait 和 `BasicSandboxRouter` 已被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。
+
+---
+
+## 数据流与生命周期
 
 ```
 1. [客户端] 创建 Session
    → SessionStore.create_session()
-   → 记录 SessionCreated 事件
 
 2. [客户端] 提交用户任务
    → SessionStore.append_event(UserMessage)
@@ -328,36 +310,34 @@ impl ToolSet {
 
 5. [ControlLoop] 从 ToolSet 获取工具描述，调用 LLM
    → LLMClient.decide(history, tools)
-   → 记录 DecisionRecorded 事件
 
 6. [LLM 决定调用工具]
    → 记录 ToolCallRequested 事件
-   → ToolSet.execute(tool, params)
+   → ToolSet.execute(tool, params, ctx)
 
-7. [ToolExecutor] 执行工具（如 BashTool → Sandbox.execute）
+7. [ToolExecutor] 执行工具
    → 记录 ToolCallResult 或 ToolCallError 事件
 
-8. [ControlLoop] 看到结果，回到步骤 4
+8. [ControlLoop] 回到步骤 4
 
 9. [LLM 给出最终答案]
    → 记录 FinalAnswer 事件
    → ControlLoop.run() 返回
-
-10. [客户端] 查询结果
-    → SessionStore.get_events(filter: FinalAnswer)
 ```
+
+---
 
 ## 崩溃恢复
 
 ```
 ControlLoop 崩溃
-  → 系统检测到
   → 用同一个 session_id 创建新的 ControlLoop
-  → ControlLoop.run() 调用 SessionStore.get_events()
-  → 发现最后一个事件是 ToolCallRequested（没有对应的 Result）
+  → SessionStore.get_events() 发现最后一个事件是 ToolCallRequested
   → LLM 看到未完成的调用，决定重试或跳过
   → 继续执行
 ```
+
+---
 
 ## 安全边界
 
@@ -365,326 +345,66 @@ ControlLoop 崩溃
 - **初始化注入**：敏感信息只在沙箱创建阶段注入（如环境变量），运行时代码无法获取注入动作本身
 - **Vault Proxy**（未来）：第三方令牌通过外部代理注入，沙箱永远接触不到原始凭据
 
+---
+
 ## Feature Flag 设计
 
 ### 设计原则
 
-1. **core 零 feature**：`lattice-core` 是纯接口层，不包含任何可选功能，所有消费者必须依赖它
-2. **实现 crate 独立成包**：每个实现（LLM 后端、存储后端、沙箱实现）是独立 crate，消费者通过 `Cargo.toml` 按需引入
-3. **Facade crate 提供便利**：`lattice` facade crate 通过 feature flags 重导出所有子 crate，方便"全家桶"使用
-4. **server 按需编译**：`lattice-server` 通过 feature 控制启用哪些 provider、存储和沙箱后端
-5. **默认最小化**：default feature 只包含最基础的功能，用户明确 opt-in 额外能力
+1. **core 零 feature**：`lattice-core` 是纯接口层，不包含任何可选功能
+2. **实现 crate 独立成包**：每个实现是独立 crate，消费者通过 `Cargo.toml` 按需引入
+3. **Facade crate 提供便利**：`lattice` facade crate 通过 feature flags 重导出所有子 crate
+4. **默认最小化**：default feature 只包含最基础的功能，用户明确 opt-in 额外能力
 
 ### Facade Crate：`lattice`
 
 ```toml
-[package]
-name = "lattice"
-
 [features]
-default = ["runtime", "store-memory", "sandbox-local"]
+default = ["runtime", "store-memory", "sandbox-local", "tools"]
 
-# 核心组件（总是可用，通过 lattice-core）
 runtime = ["dep:lattice-runtime"]
-
-# 存储后端
 store-memory = ["dep:lattice-store-memory"]
-# store-sqlite = ["dep:lattice-store-sqlite"]   # 未来
-# store-postgres = ["dep:lattice-store-postgres"] # 未来
-
-# 沙箱实现
 sandbox-local = ["dep:lattice-sandbox-local"]
-# sandbox-docker = ["dep:lattice-sandbox-docker"] # 未来
-
-# LLM 后端
+tools = ["dep:lattice-tools"]
 llm-protocol = ["dep:lattice-llm-protocol"]
 llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
 llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
 llm-all = ["llm-anthropic", "llm-openai"]
-
-# 便利组合
-full = ["runtime", "store-memory", "sandbox-local", "llm-all"]
-
-[dependencies]
-lattice-core = { path = "crates/core" }           # 始终依赖
-lattice-runtime = { path = "crates/runtime", optional = true }
-lattice-store-memory = { path = "crates/store-memory", optional = true }
-lattice-sandbox-local = { path = "crates/sandbox-local", optional = true }
-lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
-lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
-lattice-llm-openai = { path = "crates/llm-openai", optional = true }
+skill = ["dep:lattice-skill", "tools"]        # Skill 系统
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools", "skill"]
 ```
 
-`crates/server` 是独立的 `lattice-server` crate，有自己的 feature flags（default=[anthropic, openai]），受 workspace 管理。
-
-### 消费者使用示例
-
-```toml
-# 只要核心 + Anthropic
-lattice = { version = "0.1", default-features = false, features = ["runtime", "store-memory", "sandbox-local", "llm-anthropic"] }
-
-# 全家桶
-lattice = { version = "0.1", features = ["full"] }
-
-# 极简：只要接口定义（写自己的实现）
-lattice = { version = "0.1", default-features = false }
-```
-
-### Server Feature Flags
-
-```toml
-[package]
-name = "lattice-server"
-
-[features]
-default = ["anthropic", "openai"]
-
-# LLM Provider
-anthropic = ["lattice-llm-anthropic"]
-openai = ["lattice-llm-openai"]
-
-# 存储后端（未来）
-# sqlite = ["lattice-store-sqlite"]
-
-# 沙箱后端（未来）
-# docker = ["lattice-sandbox-docker"]
-```
-
-### 代码中的条件编译
-
-在 server 中按 feature 注册 provider：
-
-```rust
-pub fn register_providers(registry: &mut ProviderRegistry, config: &[ProviderConfig]) {
-    for provider in config {
-        match provider.kind {
-            #[cfg(feature = "anthropic")]
-            ProviderKind::Anthropic => { /* register */ },
-
-            #[cfg(feature = "openai")]
-            ProviderKind::OpenAI => { /* register */ },
-
-            #[allow(unreachable_patterns)]
-            _ => tracing::warn!("Provider {:?} not enabled at compile time", provider.kind),
-        }
-    }
-}
-```
-
-## 工具系统
-
-### 设计背景
-
-参考 Anthropic Managed Agents 的设计，工具（tool）的核心接口是 `execute(name, input) → output`。Brain（ControlLoop）不关心工具背后是一个沙箱容器、一个进程内函数、还是一个远程 MCP 服务器——只关心 name + input 进去，output 出来。
-
-Lattice 在此基础上做了一个重要的分层：将「工具描述」（给 LLM 看的元数据）与「工具执行」（实际运行逻辑）分离。一个 Sandbox 可以支持多个工具（如 LocalSandbox 同时支持 bash 和 python），一个工具也可以不需要 Sandbox（如 file_read 在进程内直接执行）。
-
-### 三层工具体系
+### Crate 结构
 
 ```
-┌─────────────────────────────────────────┐
-│  Layer 3: Harness-Provided Tools        │  ← 应用层注入
-│  (MCP servers, custom business tools)   │
-├─────────────────────────────────────────┤
-│  Layer 2: Standard Tool Library         │  ← 框架提供，可选启用
-│  (bash, file_read, file_write, glob,    │
-│   grep, http...)                        │
-│  - 平台感知：BashTool 根据 OS 提供      │
-│    不同的工具描述（sh/cmd）              │
-├─────────────────────────────────────────┤
-│  Layer 1: Tool Infrastructure           │  ← core 层，纯接口
-│  (ToolDescription, ToolExecutor trait,  │
-│   ToolSet)                              │
-└─────────────────────────────────────────┘
+crates/
+├── core/             # 纯接口：SessionStore, LLMClient, Sandbox, ToolExecutor, ExecutionContext
+├── runtime/          # ControlLoop 实现
+├── store-memory/     # MemoryStore 实现
+├── sandbox-local/   # LocalSandbox 实现（跨平台 shell）
+├── tools/           # ToolSet + 标准工具（BashTool 等）
+├── skill/           # Skill 系统（SkillDefinition, SkillTool, SkillLoader）  # 规划中
+├── llm-protocol/    # LLM 通用协议层
+├── llm-anthropic/   # Anthropic Claude 后端
+├── llm-openai/      # OpenAI 兼容后端
+└── server/          # HTTP API 服务（axum）
 ```
 
-**Layer 1：Tool Infrastructure（`lattice-core`）**
+---
 
-纯接口定义，零实现。包括已有的 `ToolDescription` 和新增的 `ToolExecutor` trait。
+## 未来扩展
 
-**Layer 2：Standard Tool Library（`lattice-tools`）**
+- **MCP 桥接工具**：实现 `ToolExecutor`，内部通过 MCP 协议调用外部 MCP 服务器。作为 Layer 3 工具由应用层注入。
+- **沙箱工厂（SandboxFactory）**：按需创建沙箱（如 Docker 容器），引入 factory 模式。
+- **凭据隔离**：资源绑定（token 注入沙箱初始化）和 Vault Proxy 两种模式。
+- **工具权限控制**：参考 Claude Code 的 permission 模型，按工具名配置 allow/deny 规则。
+- **RuntimeState**（第六轮）：运行时结构化状态，供规划执行器快速读写，独立于 append-only 事件日志。
+- **Planner trait**（第六轮）：将步骤决策从 LLM 中枢分离，支持小模型规划器或 FSM 规则引擎。
+- **LongTermMemory**（第六轮）：跨会话记忆，支持向量检索或 SQLite FTS5 全文检索。
 
-框架自带的常用工具实现。每个工具是独立的 struct，实现 `ToolExecutor`。通过 feature flags 按需编译，默认只包含 bash。
+---
 
-**Layer 3：Harness-Provided Tools（应用层）**
-
-框架消费者自行注册的工具——MCP 桥接、业务专用工具等。通过相同的 `ToolExecutor` trait 和 `ToolSet::add()` 接口注入，与内置工具同等公民。
-
-### 核心接口
-
-#### ToolExecutor trait（`lattice-core`）
-
-```rust
-/// Execution context passed to every tool invocation.
-pub struct ExecutionContext {
-    pub session_id: SessionId,
-    pub trigger_event_id: EventId,
-    pub store: Arc<dyn SessionStore>,
-    pub depth: u32,
-}
-pub const MAX_SKILL_DEPTH: u32 = 8;
-
-/// A tool that can be executed by the agent.
-///
-/// Implementations can be in-process (file read, HTTP fetch) or delegate
-/// to a Sandbox (bash, python). The ControlLoop treats all tools identically
-/// through this trait.
-#[async_trait]
-pub trait ToolExecutor: Send + Sync {
-    /// Return the tool description for LLM consumption.
-    fn description(&self) -> ToolDescription;
-
-    /// Execute the tool with the given parameters and execution context.
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> Result<ExecutionResult, ToolError>;
-}
-```
-
-#### ToolSet（`lattice-tools`）
-
-```rust
-/// A collection of tools available to the agent.
-///
-/// ToolSet serves two roles:
-/// 1. Provide tool descriptions to the LLM (via `descriptions()`)
-/// 2. Route tool calls to the correct executor (via `execute()`)
-pub struct ToolSet {
-    tools: HashMap<String, Box<dyn ToolExecutor>>,
-}
-
-impl ToolSet {
-    pub fn new() -> Self { ... }
-
-    /// Build a ToolSet with all default tools enabled by feature flags.
-    /// Currently includes BashTool (if the `bash` feature is enabled).
-    #[cfg(feature = "bash")]
-    pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self {
-        let mut set = Self::new();
-        set.register(BashTool::new(sandbox)).unwrap();
-        set
-    }
-
-    /// Register a tool. Returns error if a tool with the same name already exists.
-    pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> { ... }
-
-    /// List all tool descriptions (passed to LLMClient::decide).
-    pub fn descriptions(&self) -> Vec<ToolDescription> { ... }
-
-    /// Look up and execute a tool by name.
-    pub async fn execute(
-        &self,
-        name: &str,
-        params: serde_json::Value,
-        ctx: &ExecutionContext,
-    ) -> Result<ExecutionResult, ToolError> { ... }
-}
-```
-
-### 两类工具执行模式
-
-工具按执行方式分为两类，但对 ControlLoop 来说完全透明：
-
-**沙箱工具（Sandbox-backed）**：需要隔离执行环境的工具。`ToolExecutor::execute()` 内部持有 `Arc<dyn Sandbox>` 引用，委托给沙箱执行。
-
-```rust
-/// Bash tool — delegates to a Sandbox for isolated execution.
-/// Platform-aware: provides different tool descriptions based on OS.
-pub struct BashTool {
-    sandbox: Arc<dyn Sandbox>,
-}
-
-#[async_trait]
-impl ToolExecutor for BashTool {
-    fn description(&self) -> ToolDescription {
-        // Platform-specific: "sh" on Unix, "cmd" on Windows
-        #[cfg(unix)]
-        { /* Unix shell description with ls, cat, grep examples */ }
-        
-        #[cfg(windows)]
-        { /* Windows cmd description with dir, type, findstr examples */ }
-    }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> Result<ExecutionResult, ToolError> {
-        let command = params
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams(
-                "missing or invalid 'command' field (expected string)".to_string(),
-            ))?;
-        self.sandbox
-            .execute(command, params.clone())
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
-    }
-}
-```
-
-### 平台感知工具
-
-标准工具库中的某些工具（如 BashTool）是平台感知的，会根据编译目标平台提供不同的工具描述：
-
-- **Unix/Linux/macOS**：工具名为 `"sh"`，描述中包含 Unix 命令示例（ls, cat, grep, find）
-- **Windows**：工具名为 `"cmd"`，描述中包含 Windows 命令示例（dir, type, findstr, where）
-
-这确保 LLM 能够生成适合当前平台的命令。平台检测在编译时通过 `#[cfg(unix)]` 和 `#[cfg(windows)]` 完成，零运行时开销。
-
-**进程内工具（In-process）**：不需要沙箱的轻量工具，直接在框架进程内执行。
-
-```rust
-/// File read tool — reads files in-process, no sandbox needed.
-pub struct FileReadTool {
-    allowed_paths: Vec<PathBuf>,
-}
-
-#[async_trait]
-impl ToolExecutor for FileReadTool {
-    fn description(&self) -> ToolDescription { /* file_read tool schema */ }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        _ctx: &ExecutionContext,
-    ) -> Result<ExecutionResult, ToolError> {
-        let path = params["path"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidParams("missing 'path' field".to_string()))?;
-        let content = tokio::fs::read_to_string(path).await
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        Ok(ExecutionResult {
-            stdout: content,
-            stderr: String::new(),
-            exit_code: 0,
-        })
-    }
-}
-```
-
-> **注意**：FileReadTool 及其他进程内工具（glob、grep、http）尚未实现，此处为设计示例。目前已实现的标准工具仅有 BashTool。
-
-### ToolSet 与 SandboxRouter 的关系
-
-`ToolSet` 统一了工具描述和工具执行两个职责，取代了之前的 `Vec<ToolDescription>` + `SandboxRouter` 分离模式。
-
-`SandboxRouter` trait 和 `BasicSandboxRouter` 已被移除。ToolSet 完全替代了它们的职责——工具路由逻辑内化到 ToolSet 中，沙箱工具通过 `ToolExecutor` 实现内部持有 `Arc<dyn Sandbox>` 来委托执行。ControlLoop 持有 `Arc<ToolSet>`：
-
-```rust
-let tools = Arc::new(ToolSet::with_defaults(sandbox));
-let control_loop = ControlLoop::new(store, llm, tools);
-
-// Register custom tools:
-let mut tools = ToolSet::with_defaults(sandbox);
-tools.register(MyCustomTool::new()).unwrap();
-let control_loop = ControlLoop::new(store, llm, Arc::new(tools));
-```
-
-### 测试覆盖率
+## 测试覆盖率
 
 使用 `cargo-llvm-cov` 检测代码覆盖率。覆盖率指标按 crate 维度统计（line coverage、branch coverage），作为 CI 的一部分运行，不阻断合并。
 
@@ -692,53 +412,3 @@ let control_loop = ControlLoop::new(store, llm, Arc::new(tools));
 - **CI 上传**：通过 Codecov action 上传至 codecov.io
 - **报告格式**：LCOV（`--lcov`），生成 lcov.info
 - **原则**：新增代码应附带测试，保持覆盖率不下降
-
-## Crate 结构
-
-```
-crates/
-├── core/           # SessionStore, LLMClient, Sandbox, ToolExecutor traits + core types
-├── tools/          # lattice-tools: 标准工具库
-│   ├── set.rs      #   ToolSet 注册表
-│   └── bash.rs     #   BashTool（沙箱工具）
-├── runtime/        # ControlLoop（接收 Arc<ToolSet>）
-├── store-memory/   # SessionStore 内存实现
-├── sandbox-local/  # Sandbox 本地子进程实现
-├── llm-protocol/   # LLM 通用协议层（消息格式转换、响应解析）
-├── llm-anthropic/  # Anthropic Claude 后端
-├── llm-openai/     # OpenAI 兼容后端
-└── server/         # HTTP API 服务（axum）
-```
-
-#### Feature Flags
-
-```toml
-# crates/tools/Cargo.toml
-[package]
-name = "lattice-tools"
-
-[features]
-default = ["bash"]
-bash = ["lattice-sandbox-local"]
-
-[dependencies]
-lattice-core = { path = "../core" }
-lattice-sandbox-local = { path = "../sandbox-local", optional = true }
-```
-
-Facade crate 同步更新：
-
-```toml
-# 根 Cargo.toml (lattice facade)
-[features]
-default = ["runtime", "store-memory", "sandbox-local", "tools"]
-tools = ["dep:lattice-tools"]
-full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
-```
-
-### 未来扩展
-
-- **MCP 桥接工具**：实现 `ToolExecutor`，内部通过 MCP 协议调用外部 MCP 服务器。作为 Layer 3 工具由应用层注入。
-- **沙箱工厂（SandboxFactory）**：当工具需要按需创建沙箱时（如 Docker 容器），引入 factory 模式，实现 Anthropic 提出的 `provision({resources})` 语义。
-- **凭据隔离**：参考 Anthropic 的两种模式——资源绑定（token 注入沙箱初始化）和 Vault Proxy（工具通过代理访问凭据）。框架层面预留接口，不在工具实现中硬编码凭据处理。
-- **工具权限控制**：参考 Claude Code 的 permission 模型，支持按工具名配置 allow/deny 规则。
