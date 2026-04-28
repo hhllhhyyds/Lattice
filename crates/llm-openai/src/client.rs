@@ -261,7 +261,7 @@ impl lattice_core::LLMClient for OpenAIClient {
             messages,
             max_tokens: Some(self.max_tokens),
             tools,
-            stream: false,  // Disable streaming to get complete JSON response
+            stream: false, // Disable streaming to get complete JSON response
         };
 
         info!(
@@ -305,8 +305,14 @@ impl lattice_core::LLMClient for OpenAIClient {
         }
 
         // Log first 500 chars for debugging
-        debug!("response body (first 500 chars): {}",
-            if body.len() > 500 { &body[..500] } else { &body });
+        debug!(
+            "response body (first 500 chars): {}",
+            if body.len() > 500 {
+                &body[..500]
+            } else {
+                &body
+            }
+        );
 
         if !status.is_success() {
             if let Ok(err) = serde_json::from_str::<OpenAIError>(&body) {
@@ -315,12 +321,11 @@ impl lattice_core::LLMClient for OpenAIClient {
             return Err(LLMError::RequestFailed(format!("HTTP {status}: {body}")));
         }
 
-        let response: OpenAIResponse =
-            serde_json::from_str(&body).map_err(|e| {
-                info!("failed to parse response body as JSON: {}", e);
-                info!("response body: {}", body);
-                LLMError::InvalidResponse(e.to_string())
-            })?;
+        let response: OpenAIResponse = serde_json::from_str(&body).map_err(|e| {
+            info!("failed to parse response body as JSON: {}", e);
+            info!("response body: {}", body);
+            LLMError::InvalidResponse(e.to_string())
+        })?;
 
         let llm_response = self.parse_response(response)?;
         lattice_llm_protocol::response_to_decision(llm_response)
