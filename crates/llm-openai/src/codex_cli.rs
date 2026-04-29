@@ -237,6 +237,13 @@ impl lattice_core::LLMClient for CodexCliClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use lattice_core::{Actor, EventId, LLMClient, SessionId};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn parses_last_agent_message() {
@@ -251,5 +258,201 @@ mod tests {
     fn rejects_missing_agent_message() {
         let stdout = r#"{"type":"thread.started","thread_id":"t"}"#;
         assert!(CodexCliClient::parse_json_output(stdout).is_err());
+    }
+
+    #[test]
+    fn builds_prompt_from_history_and_tools() {
+        let client = CodexCliClient::new("gpt-5.5");
+        let session_id = SessionId::new_v4();
+        let history = vec![
+            event(session_id, EventPayload::SessionCreated),
+            event(
+                session_id,
+                EventPayload::UserMessage {
+                    content: "List files".into(),
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::Thinking {
+                    reasoning: "Need a shell listing".into(),
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "ls"}),
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::ToolCallResult {
+                    stdout: "Cargo.toml".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::ToolCallError {
+                    error: "boom".into(),
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::FinalAnswer {
+                    answer: "done".into(),
+                },
+            ),
+            event(
+                session_id,
+                EventPayload::StateChange {
+                    from: "running".into(),
+                    to: "done".into(),
+                },
+            ),
+        ];
+        let tools = vec![ToolDescription {
+            name: "bash".into(),
+            description: "Execute shell commands".into(),
+            parameters_schema: serde_json::json!({}),
+        }];
+
+        let prompt = client.build_prompt(&history, &tools, "Be concise.");
+
+        assert!(prompt.contains("System instructions:\nBe concise."));
+        assert!(prompt.contains("- bash: Execute shell commands"));
+        assert!(prompt.contains("User: List files"));
+        assert!(prompt.contains("Assistant thinking: Need a shell listing"));
+        assert!(prompt.contains("Assistant requested tool bash"));
+        assert!(prompt.contains("Tool result exit=0 stdout=Cargo.toml"));
+        assert!(prompt.contains("Tool error: boom"));
+        assert!(prompt.contains("Assistant final answer: done"));
+        assert!(prompt.contains("State changed: running -> done"));
+        assert!(prompt.ends_with("Produce the next assistant final answer."));
+    }
+
+    #[tokio::test]
+    async fn decide_returns_final_answer_from_fake_codex() {
+        let script = fake_codex_script(
+            "success",
+            r#"{"type":"thread.started","thread_id":"t"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"script answer"}}"#,
+            "",
+            0,
+        );
+        let client = CodexCliClient::new("gpt-5.5").with_codex_bin(script.to_string_lossy());
+        let history = vec![event(
+            SessionId::new_v4(),
+            EventPayload::UserMessage {
+                content: "Hello".into(),
+            },
+        )];
+
+        let decision = client.decide(&history, &[], "").await.unwrap();
+
+        match decision {
+            Decision::FinalAnswer { answer } => assert_eq!(answer, "script answer"),
+            _ => panic!("expected final answer"),
+        }
+    }
+
+    #[tokio::test]
+    async fn decide_returns_error_when_codex_fails() {
+        let script = fake_codex_script("failure", "", "codex failed", 2);
+        let client = CodexCliClient::new("gpt-5.5").with_codex_bin(script.to_string_lossy());
+
+        let err = client.decide(&[], &[], "").await.unwrap_err();
+
+        assert!(err.to_string().contains("codex failed"));
+    }
+
+    #[test]
+    fn with_codex_bin_overrides_default_binary() {
+        let client = CodexCliClient::new("gpt-5.5").with_codex_bin("custom-codex");
+        assert_eq!(client.codex_bin, "custom-codex");
+    }
+
+    fn event(session_id: SessionId, payload: EventPayload) -> Event {
+        Event {
+            event_id: EventId::new_v4(),
+            session_id,
+            timestamp: Utc::now(),
+            actor: Actor::System,
+            payload,
+            parent_event_id: None,
+        }
+    }
+
+    fn fake_codex_script(
+        name: &str,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+    ) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        #[cfg(windows)]
+        {
+            path.push(format!("lattice-{name}-{nanos}.cmd"));
+            let mut content = String::from("@echo off\r\n");
+            content.push_str("if not \"%1\"==\"exec\" exit /b 11\r\n");
+            content.push_str("if not \"%2\"==\"--skip-git-repo-check\" exit /b 12\r\n");
+            content.push_str("if not \"%3\"==\"--json\" exit /b 13\r\n");
+            content.push_str("if not \"%4\"==\"--model\" exit /b 14\r\n");
+            content.push_str("if not \"%5\"==\"gpt-5.5\" exit /b 15\r\n");
+            content.push_str("if not \"%6\"==\"-\" exit /b 16\r\n");
+            content.push_str("findstr /C:\"Produce the next assistant final answer.\" >nul\r\n");
+            content.push_str("if errorlevel 1 exit /b 17\r\n");
+            for line in stdout.lines() {
+                content.push_str("echo ");
+                content.push_str(line);
+                content.push_str("\r\n");
+            }
+            for line in stderr.lines() {
+                content.push_str("echo ");
+                content.push_str(line);
+                content.push_str(" 1>&2\r\n");
+            }
+            content.push_str(&format!("exit /b {exit_code}\r\n"));
+            fs::write(&path, content).unwrap();
+        }
+
+        #[cfg(unix)]
+        {
+            path.push(format!("lattice-{name}-{nanos}.sh"));
+            let mut content = String::from(
+                "#!/bin/sh\n\
+                 [ \"$1\" = \"exec\" ] || exit 11\n\
+                 [ \"$2\" = \"--skip-git-repo-check\" ] || exit 12\n\
+                 [ \"$3\" = \"--json\" ] || exit 13\n\
+                 [ \"$4\" = \"--model\" ] || exit 14\n\
+                 [ \"$5\" = \"gpt-5.5\" ] || exit 15\n\
+                 [ \"$6\" = \"-\" ] || exit 16\n\
+                 grep -F \"Produce the next assistant final answer.\" >/dev/null || exit 17\n",
+            );
+            for line in stdout.lines() {
+                content.push_str("printf '%s\\n' '");
+                content.push_str(line);
+                content.push_str("'\n");
+            }
+            for line in stderr.lines() {
+                content.push_str("printf '%s\\n' '");
+                content.push_str(line);
+                content.push_str("' >&2\n");
+            }
+            content.push_str(&format!("exit {exit_code}\n"));
+            fs::write(&path, content).unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).unwrap();
+        }
+
+        path
     }
 }
