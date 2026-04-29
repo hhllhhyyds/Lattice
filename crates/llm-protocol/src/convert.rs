@@ -8,7 +8,8 @@ use crate::request::ToolSpec;
 /// Convert a sequence of Lattice events into LLM conversation messages.
 ///
 /// Maps each relevant event payload to the appropriate message role and
-/// content block. Events like `SessionCreated` and `StateChange` are
+/// content block. Events like `SessionCreated`, skill lifecycle, and
+/// `StateChange` are
 /// skipped as they carry no conversational content.
 pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
     let mut messages: Vec<Message> = Vec::new();
@@ -69,8 +70,12 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
             EventPayload::FinalAnswer { answer } => {
                 messages.push(Message::text(Role::Assistant, answer.clone()));
             }
-            // SessionCreated and StateChange carry no conversational content.
-            EventPayload::SessionCreated | EventPayload::StateChange { .. } => {}
+            // SessionCreated, skill lifecycle, and StateChange carry no
+            // conversational content.
+            EventPayload::SessionCreated
+            | EventPayload::SkillInvoked { .. }
+            | EventPayload::SkillCompleted { .. }
+            | EventPayload::StateChange { .. } => {}
         }
     }
 
@@ -140,6 +145,27 @@ mod tests {
             make_event(EventPayload::SessionCreated),
             make_event(EventPayload::UserMessage {
                 content: "hi".into(),
+            }),
+        ];
+        let messages = events_to_messages(&events);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::User);
+    }
+
+    #[test]
+    fn test_skill_lifecycle_events_skipped() {
+        let child_session_id = SessionId::new_v4();
+        let events = vec![
+            make_event(EventPayload::SkillInvoked {
+                skill_name: "research".into(),
+                child_session_id,
+            }),
+            make_event(EventPayload::UserMessage {
+                content: "hi".into(),
+            }),
+            make_event(EventPayload::SkillCompleted {
+                skill_name: "research".into(),
+                child_session_id,
             }),
         ];
         let messages = events_to_messages(&events);

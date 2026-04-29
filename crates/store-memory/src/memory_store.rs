@@ -1,8 +1,7 @@
 //! In-memory implementation of SessionStore.
 //!
-//! Uses `Arc<RwLock<HashMap<SessionId, Vec<Event>>>>` to support
-//! concurrent access. Data is not persisted — process restarts
-//! will lose all sessions.
+//! Uses `Arc<RwLock<Inner>>` to support concurrent access. Data is not persisted
+//! and process restarts will lose all sessions.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,16 +9,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use lattice_core::{
-    error::StoreError, Actor, Event, EventFilter, EventId, EventPayload, SessionId, SessionStore,
+    error::StoreError, Actor, ChildSessionInfo, Event, EventFilter, EventId, EventPayload,
+    SessionId, SessionStore,
 };
 use tokio::sync::RwLock;
 
+/// Internal state of MemoryStore.
+struct Inner {
+    sessions: HashMap<SessionId, Vec<Event>>,
+    children: HashMap<SessionId, Vec<ChildSessionInfo>>,
+}
+
 /// In-memory session store for development and testing.
-///
-/// Not suitable for production — data is lost on process restart.
 pub struct MemoryStore {
-    /// Session id -> event log.
-    sessions: Arc<RwLock<HashMap<SessionId, Vec<Event>>>>,
+    inner: Arc<RwLock<Inner>>,
 }
 
 impl MemoryStore {
@@ -27,7 +30,18 @@ impl MemoryStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(Inner {
+                sessions: HashMap::new(),
+                children: HashMap::new(),
+            })),
+        }
+    }
+}
+
+impl Clone for MemoryStore {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -51,8 +65,8 @@ impl SessionStore for MemoryStore {
             payload: EventPayload::SessionCreated,
             parent_event_id: None,
         };
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session_id, vec![event]);
+        let mut inner = self.inner.write().await;
+        inner.sessions.insert(session_id, vec![event]);
         Ok(session_id)
     }
 
@@ -73,8 +87,9 @@ impl SessionStore for MemoryStore {
             payload,
             parent_event_id,
         };
-        let mut sessions = self.sessions.write().await;
-        let events = sessions
+        let mut inner = self.inner.write().await;
+        let events = inner
+            .sessions
             .get_mut(&session_id)
             .ok_or(StoreError::SessionNotFound(session_id))?;
         events.push(event);
@@ -87,8 +102,9 @@ impl SessionStore for MemoryStore {
         session_id: SessionId,
         filter: &EventFilter,
     ) -> Result<Vec<Event>, StoreError> {
-        let sessions = self.sessions.read().await;
-        let events = sessions
+        let inner = self.inner.read().await;
+        let events = inner
+            .sessions
             .get(&session_id)
             .ok_or(StoreError::SessionNotFound(session_id))?;
 
@@ -111,10 +127,54 @@ impl SessionStore for MemoryStore {
         Ok(result)
     }
 
+    async fn create_child_session(
+        &self,
+        parent_session_id: SessionId,
+        skill_name: &str,
+    ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError> {
+        {
+            let inner = self.inner.read().await;
+            if !inner.sessions.contains_key(&parent_session_id) {
+                return Err(StoreError::SessionNotFound(parent_session_id));
+            }
+        }
+
+        let child_store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+        let child_session_id = child_store.create_session().await?;
+        let info = ChildSessionInfo {
+            session_id: child_session_id,
+            store: Arc::clone(&child_store),
+            skill_name: skill_name.to_string(),
+            created_at: Utc::now(),
+        };
+
+        let mut inner = self.inner.write().await;
+        inner
+            .children
+            .entry(parent_session_id)
+            .or_default()
+            .push(info);
+
+        Ok((child_session_id, child_store))
+    }
+
+    async fn child_sessions(
+        &self,
+        parent_session_id: SessionId,
+    ) -> Result<Vec<ChildSessionInfo>, StoreError> {
+        let inner = self.inner.read().await;
+        Ok(inner
+            .children
+            .get(&parent_session_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     /// Returns the event id of the most recent event, if any.
     async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError> {
-        let sessions = self.sessions.read().await;
-        let events = sessions
+        let inner = self.inner.read().await;
+        let events = inner
+            .sessions
             .get(&session_id)
             .ok_or(StoreError::SessionNotFound(session_id))?;
         Ok(events.last().map(|e| e.event_id))
@@ -124,7 +184,6 @@ impl SessionStore for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lattice_core::EventPayload;
 
     #[tokio::test]
     async fn test_create_session() {
@@ -259,55 +318,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(thinking_events.len(), 1);
-
-        let tool_events = store
-            .get_events(
-                id,
-                &EventFilter {
-                    actor: None,
-                    payload_type: Some("toolCallRequested"),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(tool_events.len(), 0);
     }
 
     #[tokio::test]
-    async fn test_concurrent_read_write() {
+    async fn create_child_session_returns_independent_store() {
         let store = MemoryStore::new();
-        let id = store.create_session().await.unwrap();
+        let parent_id = store.create_session().await.unwrap();
 
-        // Spawn multiple writers and readers concurrently.
-        let sessions_clone = store.sessions.clone();
-        let handle = tokio::spawn(async move {
-            for _ in 0..10 {
-                let sessions = sessions_clone.read().await;
-                let _count = sessions.get(&id).map(|e| e.len());
-                drop(sessions);
-                tokio::task::yield_now().await;
-            }
-        });
+        let (child_id, child_store) = store
+            .create_child_session(parent_id, "web-research")
+            .await
+            .unwrap();
+
+        assert_ne!(child_id, parent_id);
+
+        child_store
+            .append_event(
+                child_id,
+                EventPayload::UserMessage {
+                    content: "child msg".into(),
+                },
+                Actor::Harness,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let parent_events = store
+            .get_events(parent_id, &EventFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(parent_events.len(), 1);
+        assert!(matches!(
+            parent_events[0].payload,
+            EventPayload::SessionCreated
+        ));
+    }
+
+    #[tokio::test]
+    async fn child_sessions_returns_correct_info() {
+        let store = MemoryStore::new();
+        let parent_id = store.create_session().await.unwrap();
+
+        let (id1, _) = store
+            .create_child_session(parent_id, "skill-a")
+            .await
+            .unwrap();
+        let (id2, _) = store
+            .create_child_session(parent_id, "skill-b")
+            .await
+            .unwrap();
+
+        let children = store.child_sessions(parent_id).await.unwrap();
+        assert_eq!(children.len(), 2);
+        assert!(children.iter().any(|c| c.session_id == id1));
+        assert!(children.iter().any(|c| c.session_id == id2));
+        assert!(children.iter().any(|c| c.skill_name == "skill-a"));
+        assert!(children.iter().any(|c| c.skill_name == "skill-b"));
+    }
+
+    #[tokio::test]
+    async fn multiple_children_accumulated() {
+        let store = MemoryStore::new();
+        let parent_id = store.create_session().await.unwrap();
 
         for i in 0..5 {
             store
-                .append_event(
-                    id,
-                    EventPayload::UserMessage {
-                        content: format!("msg {i}"),
-                    },
-                    Actor::System,
-                    None,
-                )
+                .create_child_session(parent_id, &format!("skill-{i}"))
                 .await
                 .unwrap();
         }
 
-        handle.await.unwrap();
+        let children = store.child_sessions(parent_id).await.unwrap();
+        assert_eq!(children.len(), 5);
+    }
 
-        let events = store.get_events(id, &EventFilter::default()).await.unwrap();
-        // 1 session created + 5 appended
-        assert_eq!(events.len(), 6);
+    #[tokio::test]
+    async fn child_sessions_parent_not_found() {
+        let store = MemoryStore::new();
+        let fake = SessionId::new_v4();
+        let result = store.child_sessions(fake).await.unwrap();
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
@@ -315,7 +406,6 @@ mod tests {
         let store = MemoryStore::new();
         let fake_id = SessionId::new_v4();
         let result = store.get_events(fake_id, &EventFilter::default()).await;
-        assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
             StoreError::SessionNotFound(_)

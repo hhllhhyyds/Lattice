@@ -31,5 +31,5 @@ pub use event::{Actor, Event, EventId, EventPayload, SessionId, Timestamp};
 pub use filter::EventFilter;
 pub use llm::{Decision, LLMClient};
 pub use sandbox::{ExecutionResult, Sandbox};
-pub use session::SessionStore;
-pub use tool::{ToolDescription, ToolExecutor};
+pub use session::{ChildSessionInfo, SessionStore};
+pub use tool::{ExecutionContext, ToolDescription, ToolExecutor, MAX_SKILL_DEPTH};

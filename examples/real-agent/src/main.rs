@@ -155,6 +155,18 @@ async fn run(task: String) -> Result<()> {
             EventPayload::FinalAnswer { answer } => {
                 format!("FinalAnswer: {}", truncate(answer, 80))
             }
+            EventPayload::SkillInvoked {
+                skill_name,
+                child_session_id,
+            } => {
+                format!("SkillInvoked: {skill_name} child={child_session_id}")
+            }
+            EventPayload::SkillCompleted {
+                skill_name,
+                child_session_id,
+            } => {
+                format!("SkillCompleted: {skill_name} child={child_session_id}")
+            }
             EventPayload::StateChange { from, to } => {
                 format!("StateChange: {from} → {to}")
             }

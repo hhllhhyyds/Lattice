@@ -200,6 +200,8 @@ async fn get_events(
                     lattice_core::EventPayload::ToolCallResult { .. } => "toolCallResult",
                     lattice_core::EventPayload::ToolCallError { .. } => "toolCallError",
                     lattice_core::EventPayload::FinalAnswer { .. } => "finalAnswer",
+                    lattice_core::EventPayload::SkillInvoked { .. } => "skillInvoked",
+                    lattice_core::EventPayload::SkillCompleted { .. } => "skillCompleted",
                     lattice_core::EventPayload::StateChange { .. } => "stateChange",
                 };
                 type_name == et
@@ -438,6 +440,8 @@ async fn get_status(
             lattice_core::EventPayload::ToolCallResult { .. } => "toolCallResult",
             lattice_core::EventPayload::ToolCallError { .. } => "toolCallError",
             lattice_core::EventPayload::FinalAnswer { .. } => "finalAnswer",
+            lattice_core::EventPayload::SkillInvoked { .. } => "skillInvoked",
+            lattice_core::EventPayload::SkillCompleted { .. } => "skillCompleted",
             lattice_core::EventPayload::StateChange { .. } => "stateChange",
         };
         LatestEventInfo {

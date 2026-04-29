@@ -1,9 +1,31 @@
 //! Session-related types and the SessionStore trait.
 
+use std::fmt;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::error::StoreError;
-use crate::{Actor, Event, EventFilter, EventId, EventPayload, SessionId};
+use crate::{Actor, Event, EventFilter, EventId, EventPayload, SessionId, Timestamp};
+
+/// Information about a child session.
+#[derive(Clone)]
+pub struct ChildSessionInfo {
+    pub session_id: SessionId,
+    pub store: Arc<dyn SessionStore>,
+    pub skill_name: String,
+    pub created_at: Timestamp,
+}
+
+impl fmt::Debug for ChildSessionInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildSessionInfo")
+            .field("session_id", &self.session_id)
+            .field("skill_name", &self.skill_name)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
 
 /// Session store — event log persistence.
 ///
@@ -30,6 +52,19 @@ pub trait SessionStore: Send + Sync {
         session_id: SessionId,
         filter: &EventFilter,
     ) -> Result<Vec<Event>, StoreError>;
+
+    /// Create a child session under the given parent.
+    async fn create_child_session(
+        &self,
+        parent_session_id: SessionId,
+        skill_name: &str,
+    ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError>;
+
+    /// List all child sessions for a given parent.
+    async fn child_sessions(
+        &self,
+        parent_session_id: SessionId,
+    ) -> Result<Vec<ChildSessionInfo>, StoreError>;
 
     /// Get the latest event id for a session.
     async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError>;

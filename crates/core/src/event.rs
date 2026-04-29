@@ -50,6 +50,16 @@ pub enum EventPayload {
     },
     /// Tool call failed.
     ToolCallError { error: String },
+    /// A skill was invoked — recorded in the parent session.
+    SkillInvoked {
+        skill_name: String,
+        child_session_id: SessionId,
+    },
+    /// A skill completed — recorded in the parent session.
+    SkillCompleted {
+        skill_name: String,
+        child_session_id: SessionId,
+    },
     /// LLM gave a final answer.
     FinalAnswer { answer: String },
     /// Session state changed.
@@ -107,6 +117,14 @@ mod tests {
             },
             EventPayload::ToolCallError {
                 error: "not found".to_string(),
+            },
+            EventPayload::SkillInvoked {
+                skill_name: "web-research".to_string(),
+                child_session_id: SessionId::new_v4(),
+            },
+            EventPayload::SkillCompleted {
+                skill_name: "web-research".to_string(),
+                child_session_id: SessionId::new_v4(),
             },
             EventPayload::FinalAnswer {
                 answer: "the answer".to_string(),
@@ -186,5 +204,29 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains(r#""type":"finalAnswer""#));
         assert!(json.contains(r#""answer":"42""#));
+    }
+
+    #[test]
+    fn test_skill_invoked_serde_roundtrip() {
+        let payload = EventPayload::SkillInvoked {
+            skill_name: "web-research".to_string(),
+            child_session_id: SessionId::new_v4(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: EventPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload, parsed);
+        assert!(json.contains(r#""type":"skillInvoked""#));
+    }
+
+    #[test]
+    fn test_skill_completed_serde_roundtrip() {
+        let payload = EventPayload::SkillCompleted {
+            skill_name: "web-research".to_string(),
+            child_session_id: SessionId::new_v4(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: EventPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload, parsed);
+        assert!(json.contains(r#""type":"skillCompleted""#));
     }
 }

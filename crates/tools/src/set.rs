@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use lattice_core::{Sandbox, ToolDescription, ToolError, ToolExecutor};
+use lattice_core::{ExecutionContext, Sandbox, ToolDescription, ToolError, ToolExecutor};
 use tracing::instrument;
 
 /// A collection of tools available to the agent.
@@ -12,7 +12,7 @@ use tracing::instrument;
 /// 1. Provide tool descriptions to the LLM (via `descriptions()`)
 /// 2. Route tool calls to the correct executor (via `execute()`)
 pub struct ToolSet {
-    tools: HashMap<String, Box<dyn ToolExecutor>>,
+    tools: HashMap<String, Arc<dyn ToolExecutor>>,
 }
 
 impl Default for ToolSet {
@@ -45,13 +45,23 @@ impl ToolSet {
 
     /// Register a tool. Returns error if a tool with the same name already exists.
     pub fn register(&mut self, tool: impl ToolExecutor + 'static) -> Result<(), ToolError> {
+        self.register_arc(Arc::new(tool))
+    }
+
+    /// Register a boxed tool. Returns error if a tool with the same name already exists.
+    pub fn register_boxed(&mut self, tool: Box<dyn ToolExecutor>) -> Result<(), ToolError> {
+        self.register_arc(Arc::from(tool))
+    }
+
+    /// Register a shared tool instance. Returns error if a tool with the same name already exists.
+    pub fn register_arc(&mut self, tool: Arc<dyn ToolExecutor>) -> Result<(), ToolError> {
         let name = tool.description().name.clone();
         if self.tools.contains_key(&name) {
             return Err(ToolError::Other(format!(
                 "tool '{name}' is already registered"
             )));
         }
-        self.tools.insert(name, Box::new(tool));
+        self.tools.insert(name, tool);
         Ok(())
     }
 
@@ -67,12 +77,19 @@ impl ToolSet {
         &self,
         name: &str,
         params: serde_json::Value,
+        ctx: &ExecutionContext,
     ) -> Result<lattice_core::ExecutionResult, ToolError> {
         let executor = self
             .tools
             .get(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
-        executor.execute(params).await
+        executor.execute(params, ctx).await
+    }
+
+    /// Return a shared handle to a registered tool.
+    #[must_use]
+    pub fn tool(&self, name: &str) -> Option<Arc<dyn ToolExecutor>> {
+        self.tools.get(name).cloned()
     }
 
     /// Check if a tool is registered.
@@ -97,7 +114,12 @@ impl ToolSet {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use lattice_core::{ExecutionResult, ToolDescription, ToolError, ToolExecutor};
+    use std::sync::Arc;
+
+    use lattice_core::{
+        Actor, ChildSessionInfo, Event, EventFilter, EventPayload, ExecutionContext,
+        ExecutionResult, SessionId, StoreError, ToolDescription, ToolError, ToolExecutor,
+    };
 
     use crate::ToolSet;
 
@@ -129,8 +151,70 @@ mod tests {
             }
         }
 
-        async fn execute(&self, _params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _ctx: &ExecutionContext,
+        ) -> Result<ExecutionResult, ToolError> {
             self.result.clone()
+        }
+    }
+
+    struct MockStore;
+
+    #[async_trait]
+    impl lattice_core::SessionStore for MockStore {
+        async fn create_session(&self) -> Result<SessionId, StoreError> {
+            Ok(SessionId::new_v4())
+        }
+
+        async fn append_event(
+            &self,
+            _session_id: SessionId,
+            _payload: EventPayload,
+            _actor: Actor,
+            _parent_event_id: Option<lattice_core::EventId>,
+        ) -> Result<lattice_core::EventId, StoreError> {
+            Ok(lattice_core::EventId::new_v4())
+        }
+
+        async fn get_events(
+            &self,
+            _session_id: SessionId,
+            _filter: &EventFilter,
+        ) -> Result<Vec<Event>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_child_session(
+            &self,
+            _parent_session_id: SessionId,
+            _skill_name: &str,
+        ) -> Result<(SessionId, Arc<dyn lattice_core::SessionStore>), StoreError> {
+            Ok((SessionId::new_v4(), Arc::new(MockStore)))
+        }
+
+        async fn child_sessions(
+            &self,
+            _parent_session_id: SessionId,
+        ) -> Result<Vec<ChildSessionInfo>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn latest_event_id(
+            &self,
+            _session_id: SessionId,
+        ) -> Result<Option<lattice_core::EventId>, StoreError> {
+            Ok(None)
+        }
+    }
+
+    fn test_ctx() -> ExecutionContext {
+        ExecutionContext {
+            session_id: SessionId::new_v4(),
+            trigger_event_id: lattice_core::EventId::new_v4(),
+            store: Arc::new(MockStore),
+            depth: 0,
         }
     }
 
@@ -179,7 +263,8 @@ mod tests {
     fn execute_unknown_tool_returns_not_found() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let set = ToolSet::new();
-        let result = rt.block_on(set.execute("nonexistent", serde_json::json!({})));
+        let ctx = test_ctx();
+        let result = rt.block_on(set.execute("nonexistent", serde_json::json!({}), &ctx));
         assert!(matches!(result, Err(ToolError::NotFound(_))));
     }
 
@@ -188,7 +273,7 @@ mod tests {
         let set = ToolSet::new();
         // No tools registered — execute returns NotFound.
         let result = set
-            .execute("bash", serde_json::json!({ "command": 123 }))
+            .execute("bash", serde_json::json!({ "command": 123 }), &test_ctx())
             .await;
         assert!(matches!(result, Err(ToolError::NotFound(_))));
     }
@@ -233,7 +318,11 @@ mod tests {
         let mut set = ToolSet::new();
         set.register(tool).unwrap();
 
-        let got = set.execute("success", serde_json::json!({})).await.unwrap();
+        let ctx = test_ctx();
+        let got = set
+            .execute("success", serde_json::json!({}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(got.stdout, "hello world");
         assert_eq!(got.stderr, "err output");
         assert_eq!(got.exit_code, 42);
