@@ -44,6 +44,7 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/messages",
             post(submit_message).get(get_messages),
         )
+        .route("/sessions/{id}/run", post(trigger_run))
         .route("/sessions/{id}/status", get(get_status))
 }
 
@@ -243,7 +244,7 @@ async fn session_status_from_index(
 ) -> SessionStatus {
     let runs = active_runs.read().await;
     match runs.get(&session_id) {
-        Some(handle) => match handle.status {
+        Some(handle) => match &handle.status {
             crate::RunStatus::Running => SessionStatus::Running,
             crate::RunStatus::Completed => SessionStatus::Completed,
             crate::RunStatus::Failed(_) => SessionStatus::Failed,
@@ -262,12 +263,12 @@ async fn run_status_and_info(
     let runs = active_runs.read().await;
     match runs.get(&session_id) {
         Some(handle) => {
-            let status = match handle.status {
+            let status = match &handle.status {
                 crate::RunStatus::Running => SessionStatus::Running,
                 crate::RunStatus::Completed => SessionStatus::Completed,
                 crate::RunStatus::Failed(_) => SessionStatus::Failed,
             };
-            let run_status = match handle.status {
+            let run_status = match &handle.status {
                 crate::RunStatus::Running => RunStatus::Running,
                 crate::RunStatus::Completed => RunStatus::Completed,
                 crate::RunStatus::Failed(_) => RunStatus::Failed,
@@ -308,12 +309,20 @@ async fn submit_message(
     // Check for concurrent run.
     {
         let runs = state.active_runs.read().await;
-        if runs.contains_key(&session_id) {
+        if matches!(
+            runs.get(&session_id).map(|handle| &handle.status),
+            Some(crate::RunStatus::Running)
+        ) {
             return Err(AppError::Conflict(
                 "Session already has a running task".into(),
             ));
         }
     }
+
+    let llm = state
+        .llm_factory
+        .create(req.provider.as_deref(), req.model.as_deref())
+        .map_err(AppError::InvalidRequest)?;
 
     // Append UserMessage event.
     state
@@ -332,25 +341,84 @@ async fn submit_message(
     // Register a RunHandle (for now, just mark as running).
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
+    let system_prompt = req.system_prompt.unwrap_or_else(|| {
+        "You are a helpful agent. You can execute shell commands using the available shell tool. \
+         After getting tool results, provide a clear final answer to the user."
+            .to_string()
+    });
+    let max_iterations = req.max_iterations.unwrap_or(50);
+    crate::spawn_control_loop_run(
+        Arc::clone(&state),
+        session_id,
+        run_id.clone(),
+        started_at,
+        llm,
+        system_prompt,
+        max_iterations,
+    )
+    .await;
 
+    let response = SubmitMessageResponse {
+        session_id,
+        run_id,
+        status: "running",
+        message: "Agent task started",
+    };
+
+    Ok((axum::http::StatusCode::ACCEPTED, Json(response)))
+}
+
+/// POST /v1/sessions/:id/run — trigger agent execution for existing session events.
+async fn trigger_run(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+    Json(req): Json<RunRequest>,
+) -> Result<(axum::http::StatusCode, Json<SubmitMessageResponse>), AppError> {
+    // Verify session exists.
     {
-        let mut runs = state.active_runs.write().await;
-        let join_handle = tokio::spawn(async {
-            // TODO: Actually run ControlLoop here.
-            // For now, just sleep briefly to simulate work.
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        });
-
-        runs.insert(
-            session_id,
-            crate::RunHandle {
-                session_id,
-                status: crate::RunStatus::Running,
-                started_at,
-                abort_handle: join_handle.abort_handle(),
-            },
-        );
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
     }
+
+    // Check for concurrent run.
+    {
+        let runs = state.active_runs.read().await;
+        if matches!(
+            runs.get(&session_id).map(|handle| &handle.status),
+            Some(crate::RunStatus::Running)
+        ) {
+            return Err(AppError::Conflict(
+                "Session already has a running task".into(),
+            ));
+        }
+    }
+
+    let llm = state
+        .llm_factory
+        .create(req.provider.as_deref(), req.model.as_deref())
+        .map_err(AppError::InvalidRequest)?;
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now();
+    let system_prompt = req.system_prompt.unwrap_or_else(|| {
+        "You are a helpful agent. You can execute shell commands using the available shell tool. \
+         After getting tool results, provide a clear final answer to the user."
+            .to_string()
+    });
+    let max_iterations = req.max_iterations.unwrap_or(50);
+
+    crate::spawn_control_loop_run(
+        Arc::clone(&state),
+        session_id,
+        run_id.clone(),
+        started_at,
+        llm,
+        system_prompt,
+        max_iterations,
+    )
+    .await;
 
     let response = SubmitMessageResponse {
         session_id,
@@ -452,17 +520,12 @@ async fn get_status(
     let (run_status, run_started_at, run_completed_at) = {
         let runs = state.active_runs.read().await;
         if let Some(handle) = runs.get(&session_id) {
-            let status = match handle.status {
+            let status = match &handle.status {
                 crate::RunStatus::Running => "running",
                 crate::RunStatus::Completed => "completed",
                 crate::RunStatus::Failed(_) => "failed",
             };
-            let completed_at = match handle.status {
-                crate::RunStatus::Completed | crate::RunStatus::Failed(_) => {
-                    Some(chrono::Utc::now())
-                }
-                _ => None,
-            };
+            let completed_at = handle.completed_at;
             (status, Some(handle.started_at), completed_at)
         } else {
             ("idle", None, None)

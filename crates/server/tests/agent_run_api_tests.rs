@@ -5,17 +5,58 @@
 //! - GET /v1/sessions/:id/messages — get conversation history
 //! - GET /v1/sessions/:id/status — query execution status
 
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use lattice_core::SessionStore;
-use lattice_server::{new_state, router};
+use lattice_core::{Decision, Event, LLMClient, LLMError, SessionStore, ToolDescription};
+use lattice_server::{new_state, new_state_with_components, router, LlmClientFactory};
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 
 /// Helper to create a test app with MemoryStore.
 fn make_app() -> axum::Router {
     let store = Arc::new(lattice_store_memory::MemoryStore::new());
-    router(new_state(store))
+    router(new_state_with_components(
+        store,
+        Arc::new(FakeLlmFactory),
+        Arc::new(lattice_tools::ToolSet::new()),
+    ))
+}
+
+struct FakeLlmFactory;
+
+impl LlmClientFactory for FakeLlmFactory {
+    fn create(
+        &self,
+        _provider: Option<&str>,
+        _model: Option<&str>,
+    ) -> Result<Arc<dyn LLMClient>, String> {
+        Ok(Arc::new(FakeLlm {
+            answer: "test answer".to_string(),
+            delay: Duration::from_millis(150),
+        }))
+    }
+}
+
+struct FakeLlm {
+    answer: String,
+    delay: Duration,
+}
+
+#[async_trait]
+impl LLMClient for FakeLlm {
+    async fn decide(
+        &self,
+        _history: &[Event],
+        _available_tools: &[ToolDescription],
+        _system_prompt: &str,
+    ) -> Result<Decision, LLMError> {
+        tokio::time::sleep(self.delay).await;
+        Ok(Decision::FinalAnswer {
+            answer: self.answer.clone(),
+        })
+    }
 }
 
 /// Helper to create a session and return its ID.
@@ -205,6 +246,105 @@ async fn post_message_with_system_prompt() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn post_run_triggers_control_loop_for_existing_session() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/run", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"maxIterations":5}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["sessionId"], session_id);
+    assert!(json["runId"].is_string());
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{}/status", session_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(status_response.into_body(), 1024)
+        .await
+        .unwrap();
+    let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status_json["runStatus"], "completed");
+}
+
+#[tokio::test]
+async fn post_run_session_not_found_returns_404() {
+    let app = make_app();
+    let fake_id = "00000000-0000-0000-0000-000000000000";
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/run", fake_id))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn post_run_concurrent_run_returns_409() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/run", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/run", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::CONFLICT);
 }
 
 // --- GET /v1/sessions/:id/messages tests ---
@@ -445,7 +585,7 @@ async fn get_messages_with_final_answer() {
 
     // Manually append a UserMessage and FinalAnswer event.
     let store = Arc::new(lattice_store_memory::MemoryStore::new());
-    let state = lattice_server::new_state(store.clone());
+    let state = new_state(store.clone());
 
     // Create session.
     let sid = store.create_session().await.unwrap();
@@ -610,4 +750,65 @@ async fn get_status_with_completed_run() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     // Status should be running or idle (depending on timing).
     assert!(json["runStatus"].is_string());
+}
+
+#[tokio::test]
+async fn submitted_message_runs_control_loop_to_final_answer() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/messages", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"hello"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{}/status", session_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(status_response.into_body(), 1024)
+        .await
+        .unwrap();
+    let status_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status_json["runStatus"], "completed");
+    assert!(status_json["runCompletedAt"].is_string());
+
+    let messages_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{}/messages", session_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(messages_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(messages_response.into_body(), 2048)
+        .await
+        .unwrap();
+    let messages_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let messages = messages_json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"], "hello");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"], "test answer");
 }
