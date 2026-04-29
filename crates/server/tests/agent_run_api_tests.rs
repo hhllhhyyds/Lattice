@@ -114,6 +114,75 @@ async fn post_message_returns_202_accepted() {
 }
 
 #[tokio::test]
+async fn create_session_with_metadata_is_visible_in_session_detail_and_list() {
+    let app = make_app();
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"metadata":{"name":"MiniMax debug","tags":["ui","test"]}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(create_response.into_body(), 1024)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let session_id = created["sessionId"].as_str().unwrap();
+    assert_eq!(created["metadata"]["name"], "MiniMax debug");
+    assert_eq!(created["metadata"]["tags"][0], "ui");
+
+    let detail_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(detail_response.into_body(), 1024)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(detail["metadata"]["name"], "MiniMax debug");
+    assert_eq!(detail["metadata"]["tags"][1], "test");
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list_response.into_body(), 4096)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let matching = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["sessionId"] == session_id)
+        .unwrap();
+    assert_eq!(matching["metadata"]["name"], "MiniMax debug");
+    assert_eq!(matching["metadata"]["tags"][0], "ui");
+}
+
+#[tokio::test]
 async fn post_message_session_not_found_returns_404() {
     let app = make_app();
     let fake_id = "00000000-0000-0000-0000-000000000000";

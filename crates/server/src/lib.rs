@@ -387,6 +387,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn web_ui_styles_route_serves_css() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/css; charset=utf-8"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let css = String::from_utf8(body.to_vec()).unwrap();
+        assert!(css.contains(".app-shell"));
+        assert!(css.contains(".status-chip"));
+    }
+
+    #[tokio::test]
+    async fn web_ui_script_route_serves_javascript() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let js = String::from_utf8(body.to_vec()).unwrap();
+        assert!(js.contains("loadSessions"));
+        assert!(js.contains("sendMessage"));
+    }
+
+    #[tokio::test]
     async fn health_response_body_is_valid_json() {
         let app = make_app();
         let response = app
