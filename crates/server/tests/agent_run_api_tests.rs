@@ -8,7 +8,10 @@
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use lattice_core::{Decision, Event, LLMClient, LLMError, SessionStore, ToolDescription};
+use lattice_core::{
+    Actor, Decision, Event, EventFilter, EventPayload, LLMClient, LLMError, SessionStore,
+    ToolDescription,
+};
 use lattice_server::{new_state, new_state_with_components, router, LlmClientFactory};
 use std::sync::Arc;
 use std::time::Duration;
@@ -811,4 +814,283 @@ async fn submitted_message_runs_control_loop_to_final_answer() {
     assert_eq!(messages[0]["content"], "hello");
     assert_eq!(messages[1]["role"], "assistant");
     assert_eq!(messages[1]["content"], "test answer");
+}
+
+// --- GET /v1/sessions/:id/stream tests ---
+
+#[tokio::test]
+async fn session_stream_returns_404_for_missing_session() {
+    let app = make_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sessions/00000000-0000-0000-0000-000000000000/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn session_stream_can_replay_history_and_emit_done() {
+    let store = Arc::new(lattice_store_memory::MemoryStore::new());
+    let state = new_state_with_components(
+        store.clone(),
+        Arc::new(FakeLlmFactory),
+        Arc::new(lattice_tools::ToolSet::new()),
+    );
+    let session_id = store.create_session().await.unwrap();
+
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.push(lattice_server::SessionInfo {
+            session_id,
+            created_at: chrono::Utc::now(),
+            metadata: None,
+        });
+    }
+
+    store
+        .append_event(
+            session_id,
+            EventPayload::UserMessage {
+                content: "history question".into(),
+            },
+            Actor::Harness,
+            None,
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            session_id,
+            EventPayload::FinalAnswer {
+                answer: "history answer".into(),
+            },
+            Actor::LLM,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/sessions/{}/stream?includeHistory=true",
+                    session_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("event: session_event"));
+    assert!(text.contains("\"type\":\"sessionCreated\""));
+    assert!(text.contains("\"content\":\"history question\""));
+    assert!(text.contains("\"answer\":\"history answer\""));
+    assert!(text.contains("event: done"));
+}
+
+#[tokio::test]
+async fn session_stream_after_cursor_skips_older_history() {
+    let store = Arc::new(lattice_store_memory::MemoryStore::new());
+    let state = new_state_with_components(
+        store.clone(),
+        Arc::new(FakeLlmFactory),
+        Arc::new(lattice_tools::ToolSet::new()),
+    );
+    let session_id = store.create_session().await.unwrap();
+
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.push(lattice_server::SessionInfo {
+            session_id,
+            created_at: chrono::Utc::now(),
+            metadata: None,
+        });
+    }
+
+    let history_before = store
+        .get_events(session_id, &EventFilter::default())
+        .await
+        .unwrap();
+    let session_created_id = history_before[0].event_id;
+
+    store
+        .append_event(
+            session_id,
+            EventPayload::UserMessage {
+                content: "cursor question".into(),
+            },
+            Actor::Harness,
+            None,
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            session_id,
+            EventPayload::FinalAnswer {
+                answer: "cursor answer".into(),
+            },
+            Actor::LLM,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/sessions/{}/stream?includeHistory=true&after={}",
+                    session_id, session_created_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!text.contains("\"type\":\"sessionCreated\""));
+    assert!(text.contains("\"content\":\"cursor question\""));
+    assert!(text.contains("\"answer\":\"cursor answer\""));
+}
+
+#[tokio::test]
+async fn session_stream_pushes_live_events() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let stream_future = {
+        let app = app.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{}/stream", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        })
+    };
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+
+    let submit_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/messages", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"live stream test"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+
+    let response = stream_future.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("\"content\":\"live stream test\""));
+    assert!(text.contains("\"answer\":\"test answer\""));
+    assert!(text.contains("event: done"));
+}
+
+#[tokio::test]
+async fn session_stream_supports_multiple_subscribers() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let subscriber_a = {
+        let app = app.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{}/stream", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        })
+    };
+
+    let subscriber_b = {
+        let app = app.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            app.oneshot(
+                Request::builder()
+                    .uri(format!("/v1/sessions/{}/stream", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        })
+    };
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+
+    let submit_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{}/messages", session_id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"fanout test"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+
+    let response_a = subscriber_a.await.unwrap();
+    let response_b = subscriber_b.await.unwrap();
+
+    let body_a = axum::body::to_bytes(response_a.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let body_b = axum::body::to_bytes(response_b.into_body(), 32 * 1024)
+        .await
+        .unwrap();
+    let text_a = String::from_utf8(body_a.to_vec()).unwrap();
+    let text_b = String::from_utf8(body_b.to_vec()).unwrap();
+
+    assert!(text_a.contains("\"content\":\"fanout test\""));
+    assert!(text_b.contains("\"content\":\"fanout test\""));
+    assert!(text_a.contains("\"answer\":\"test answer\""));
+    assert!(text_b.contains("\"answer\":\"test answer\""));
 }
