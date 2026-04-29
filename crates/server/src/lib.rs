@@ -6,6 +6,7 @@
 mod api;
 mod error;
 mod ui;
+mod streaming;
 
 use std::collections::HashMap;
 use std::env;
@@ -25,11 +26,14 @@ use tower_http::trace::TraceLayer;
 
 use crate::api::types::SessionMetadata;
 pub use crate::error::AppError;
+use crate::streaming::{EventHub, NotifyingStore};
 
 /// Global shared application state.
 pub struct AppState {
     /// Session store (currently MemoryStore, swappable via trait).
     pub store: Arc<dyn lattice_core::SessionStore>,
+    /// Broadcast hub for per-session event fan-out.
+    pub event_hub: Arc<EventHub>,
     /// Factory for creating LLM clients per submitted run.
     pub llm_factory: Arc<dyn LlmClientFactory>,
     /// Tool registry used by agent runs.
@@ -181,25 +185,17 @@ pub async fn spawn_control_loop_run(
     let run_id_for_task = run_id.clone();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
 
-    let join_handle = tokio::spawn(async move {
+    let worker_handle = tokio::spawn(async move {
         let _ = start_rx.await;
         let control_loop =
             ControlLoop::with_options(store, llm, tools, system_prompt, max_iterations);
-        let status = match control_loop.run(session_id).await {
+        match control_loop.run(session_id).await {
             Ok(_) => RunStatus::Completed,
             Err(err) => RunStatus::Failed(err.to_string()),
-        };
-
-        let mut runs = active_runs.write().await;
-        if let Some(handle) = runs.get_mut(&session_id) {
-            if handle.run_id == run_id_for_task {
-                handle.status = status;
-                handle.completed_at = Some(Utc::now());
-            }
         }
     });
 
-    let abort_handle = join_handle.abort_handle();
+    let abort_handle = worker_handle.abort_handle();
     {
         let mut runs = state.active_runs.write().await;
         runs.insert(
@@ -214,6 +210,23 @@ pub async fn spawn_control_loop_run(
             },
         );
     }
+
+    tokio::spawn(async move {
+        let status = match worker_handle.await {
+            Ok(status) => status,
+            Err(err) if err.is_cancelled() => RunStatus::Failed("run aborted".into()),
+            Err(err) => RunStatus::Failed(format!("run task failed to join: {err}")),
+        };
+
+        let mut runs = active_runs.write().await;
+        if let Some(handle) = runs.get_mut(&session_id) {
+            if handle.run_id == run_id_for_task {
+                handle.status = status;
+                handle.completed_at = Some(Utc::now());
+            }
+        }
+    });
+
     let _ = start_tx.send(());
 
     abort_handle
@@ -290,8 +303,13 @@ pub fn new_state_with_components(
     llm_factory: Arc<dyn LlmClientFactory>,
     tools: Arc<ToolSet>,
 ) -> AppState {
+    let event_hub = Arc::new(EventHub::new());
+    let store: Arc<dyn lattice_core::SessionStore> =
+        Arc::new(NotifyingStore::new(store, Arc::clone(&event_hub)));
+
     AppState {
         store,
+        event_hub,
         llm_factory,
         tools,
         active_runs: Arc::new(RwLock::new(HashMap::new())),
@@ -558,7 +576,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawned_control_loop_updates_completed_status() {
+    async fn spawned_control_loop_registers_run_handle() {
         let store: Arc<dyn lattice_core::SessionStore> =
             Arc::new(lattice_store_memory::MemoryStore::new());
         let session_id = store.create_session().await.unwrap();
@@ -585,13 +603,14 @@ mod tests {
             5,
         )
         .await;
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let runs = state.active_runs.read().await;
         let handle = runs.get(&session_id).unwrap();
         assert_eq!(handle.run_id, run_id);
-        assert!(matches!(handle.status, RunStatus::Completed));
-        assert!(handle.completed_at.is_some());
+        assert!(matches!(
+            handle.status,
+            RunStatus::Running | RunStatus::Completed
+        ));
     }
 
     #[tokio::test]

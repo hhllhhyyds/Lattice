@@ -1,9 +1,13 @@
 //! Session API handlers.
 
+use std::collections::HashSet;
+use std::convert::Infallible;
 use std::sync::Arc;
 
+use async_stream::stream;
 use axum::{
     extract::{Path, Query, State},
+    response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
@@ -30,6 +34,16 @@ pub struct EventQuery {
     pub limit: usize,
 }
 
+/// Query parameters for SSE session streaming.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamQuery {
+    /// Replay events after this event id.
+    pub after: Option<EventId>,
+    /// Whether to emit existing history before subscribing to live events.
+    pub include_history: Option<bool>,
+}
+
 fn default_limit() -> usize {
     100
 }
@@ -40,6 +54,7 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/sessions/{id}", get(get_session))
         .route("/sessions/{id}/events", get(get_events))
+        .route("/sessions/{id}/stream", get(session_stream))
         .route(
             "/sessions/{id}/messages",
             post(submit_message).get(get_messages),
@@ -236,6 +251,92 @@ async fn get_events(
     Ok(Json(EventListResponse { events, has_more }))
 }
 
+/// GET /v1/sessions/:id/stream — returns an SSE stream for session events.
+async fn session_stream(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+    Query(query): Query<StreamQuery>,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<SseEvent, Infallible>>>, AppError> {
+    {
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
+    }
+
+    let mut receiver = state.event_hub.subscribe(session_id).await;
+    let include_history = query.include_history.unwrap_or(false);
+    let history = if include_history {
+        let all_events = state
+            .store
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .map_err(|e| AppError::InternalError(e.to_string()))?;
+
+        if let Some(after) = query.after {
+            let mut seen_after = false;
+            all_events
+                .into_iter()
+                .filter(|event| {
+                    if seen_after {
+                        true
+                    } else if event.event_id == after {
+                        seen_after = true;
+                        false
+                    } else {
+                        false
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            all_events
+        }
+    } else {
+        Vec::new()
+    };
+
+    let stream = stream! {
+        let mut seen_ids = history
+            .iter()
+            .map(|event| event.event_id.to_string())
+            .collect::<HashSet<_>>();
+
+        for event in history {
+            let terminal = is_terminal_event(&event.payload);
+            yield Ok(to_session_sse_event(&event));
+            if terminal {
+                yield Ok(done_event(session_id));
+                return;
+            }
+        }
+
+        loop {
+            match receiver.recv().await {
+                Ok(event) => {
+                    if !seen_ids.insert(event.event_id.to_string()) {
+                        continue;
+                    }
+
+                    let terminal = is_terminal_event(&event.payload);
+                    yield Ok(to_session_sse_event(&event));
+                    if terminal {
+                        yield Ok(done_event(session_id));
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
 // --- Internal helpers ---
 
 /// Derives the session status from active_runs.
@@ -312,10 +413,13 @@ async fn submit_message(
     // Check for concurrent run.
     {
         let runs = state.active_runs.read().await;
-        if matches!(
+        let has_running_handle = matches!(
             runs.get(&session_id).map(|handle| &handle.status),
             Some(crate::RunStatus::Running)
-        ) {
+        );
+        drop(runs);
+
+        if has_running_handle && !session_has_terminal_event(&state, session_id).await? {
             return Err(AppError::Conflict(
                 "Session already has a running task".into(),
             ));
@@ -388,10 +492,13 @@ async fn trigger_run(
     // Check for concurrent run.
     {
         let runs = state.active_runs.read().await;
-        if matches!(
+        let has_running_handle = matches!(
             runs.get(&session_id).map(|handle| &handle.status),
             Some(crate::RunStatus::Running)
-        ) {
+        );
+        drop(runs);
+
+        if has_running_handle && !session_has_terminal_event(&state, session_id).await? {
             return Err(AppError::Conflict(
                 "Session already has a running task".into(),
             ));
@@ -519,19 +626,33 @@ async fn get_status(
         }
     });
 
+    let completed_at_from_events = events
+        .last()
+        .and_then(|event| is_terminal_event(&event.payload).then_some(event.timestamp));
+
     // Check run status.
     let (run_status, run_started_at, run_completed_at) = {
         let runs = state.active_runs.read().await;
         if let Some(handle) = runs.get(&session_id) {
-            let status = match &handle.status {
-                crate::RunStatus::Running => "running",
-                crate::RunStatus::Completed => "completed",
-                crate::RunStatus::Failed(_) => "failed",
+            let status = if matches!(handle.status, crate::RunStatus::Running)
+                && completed_at_from_events.is_some()
+            {
+                "completed"
+            } else {
+                match &handle.status {
+                    crate::RunStatus::Running => "running",
+                    crate::RunStatus::Completed => "completed",
+                    crate::RunStatus::Failed(_) => "failed",
+                }
             };
-            let completed_at = handle.completed_at;
+            let completed_at = handle.completed_at.or(completed_at_from_events);
             (status, Some(handle.started_at), completed_at)
         } else {
-            ("idle", None, None)
+            if let Some(completed_at) = completed_at_from_events {
+                ("completed", None, Some(completed_at))
+            } else {
+                ("idle", None, None)
+            }
         }
     };
 
@@ -543,4 +664,39 @@ async fn get_status(
         event_count,
         latest_event,
     }))
+}
+
+fn is_terminal_event(payload: &lattice_core::EventPayload) -> bool {
+    matches!(payload, lattice_core::EventPayload::FinalAnswer { .. })
+}
+
+fn to_session_sse_event(event: &lattice_core::Event) -> SseEvent {
+    let data = serde_json::to_string(&EventResponse::from(event.clone()))
+        .expect("event response serialization should not fail");
+    SseEvent::default()
+        .event("session_event")
+        .id(event.event_id.to_string())
+        .data(data)
+}
+
+fn done_event(session_id: SessionId) -> SseEvent {
+    let data = serde_json::json!({
+        "sessionId": session_id,
+        "status": "completed",
+    });
+    SseEvent::default().event("done").data(data.to_string())
+}
+
+async fn session_has_terminal_event(
+    state: &Arc<AppState>,
+    session_id: SessionId,
+) -> Result<bool, AppError> {
+    let events = state
+        .store
+        .get_events(session_id, &lattice_core::EventFilter::default())
+        .await
+        .map_err(|e| AppError::InternalError(e.to_string()))?;
+    Ok(events
+        .last()
+        .is_some_and(|event| is_terminal_event(&event.payload)))
 }

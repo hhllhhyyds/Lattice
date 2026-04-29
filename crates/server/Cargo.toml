@@ -32,6 +32,9 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+async-stream = "0.3"
+async-trait = { workspace = true }
+futures-core = "0.3"
 
 [dev-dependencies]
 async-trait = { workspace = true }
