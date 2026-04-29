@@ -18,6 +18,7 @@ lattice-core = { path = "../core" }
 lattice-runtime = { path = "../runtime" }
 lattice-store-memory = { path = "../store-memory" }
 lattice-sandbox-local = { path = "../sandbox-local" }
+lattice-tools = { path = "../tools" }
 lattice-llm-protocol = { path = "../llm-protocol", optional = true }
 lattice-llm-anthropic = { path = "../llm-anthropic", optional = true }
 lattice-llm-openai = { path = "../llm-openai", optional = true }
@@ -33,6 +34,7 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 axum = { workspace = true }
 hyper = { workspace = true }
 tower = { workspace = true }

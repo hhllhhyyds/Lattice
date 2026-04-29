@@ -138,17 +138,27 @@ pub struct SubmitMessageRequest {
     #[serde(default)]
     pub content: String,
     /// Optional LLM provider (e.g., "anthropic", "openai").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)] // TODO: use in LLM client factory
     pub provider: Option<String>,
     /// Optional model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)] // TODO: use in LLM client factory
     pub model: Option<String>,
     /// Optional system prompt override.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)] // TODO: use in ControlLoop
     pub system_prompt: Option<String>,
+    /// Optional maximum number of ControlLoop iterations.
+    pub max_iterations: Option<usize>,
+}
+
+/// Request to trigger agent execution for an existing session.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRequest {
+    /// Optional LLM provider (e.g., "anthropic", "openai").
+    pub provider: Option<String>,
+    /// Optional model name.
+    pub model: Option<String>,
+    /// Optional system prompt override.
+    pub system_prompt: Option<String>,
+    /// Optional maximum number of ControlLoop iterations.
+    pub max_iterations: Option<usize>,
 }
 
 /// Response after submitting a message (202 Accepted).
