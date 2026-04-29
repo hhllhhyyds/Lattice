@@ -105,6 +105,13 @@ http://127.0.0.1:3000
 - 查看事件列表
 - 查看运行状态
 
+Web UI 现在已经接入会话级 **SSE 实时事件流**：
+
+- 进入会话时会先回放已有历史事件
+- 新事件会实时推送到页面
+- 消息区、事件区、状态区会自动更新
+- 不需要前端持续轮询 `status` / `events` / `messages`
+
 如果要让 Web UI 真正调用模型，需要先配置服务端使用的 LLM 环境变量，例如：
 
 ```powershell
@@ -137,6 +144,28 @@ $env:LATTICE_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
 ```
 
 那么进入 Web UI 后，`Provider` 和 `模型` 两个输入框都可以留空，直接发送消息即可。
+
+### Web UI 实时效果
+
+启动 `lattice-server` 后，打开浏览器：
+
+```text
+http://127.0.0.1:3000
+```
+
+然后：
+
+1. 创建一个 session
+2. 发送一条消息
+3. 直接观察页面
+
+你会看到：
+
+- 消息区自动追加 user / assistant 消息
+- 事件区实时出现 `userMessage`、`thinking`、`toolCallRequested`、`toolCallResult`、`finalAnswer`
+- 状态从 `running` 自动变成 `completed`
+
+这套刷新机制来自后端的 `/v1/sessions/:id/stream` SSE 接口，而不是前端定时轮询。
 
 ### MiniMax / SiliconFlow 示例
 
