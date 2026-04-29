@@ -5,6 +5,7 @@
 
 mod api;
 mod error;
+mod ui;
 
 use std::collections::HashMap;
 use std::env;
@@ -258,6 +259,9 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// Builds the application router with all routes and middleware.
 fn app(state: AppState) -> Router {
     Router::new()
+        .route("/", get(ui::index))
+        .route("/ui/app.css", get(ui::styles))
+        .route("/ui/app.js", get(ui::script))
         .route("/health", get(health_check))
         .nest("/v1", crate::api::v1_routes())
         .layer(TraceLayer::new_for_http())
@@ -363,6 +367,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn root_serves_web_ui() {
+        let app = make_app();
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Lattice Console"));
+        assert!(html.contains("/ui/app.js"));
     }
 
     #[tokio::test]
