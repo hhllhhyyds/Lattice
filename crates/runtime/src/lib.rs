@@ -26,4 +26,4 @@
 
 mod control_loop;
 
-pub use control_loop::ControlLoop;
+pub use control_loop::{ControlLoop, ControlLoopBuilder};

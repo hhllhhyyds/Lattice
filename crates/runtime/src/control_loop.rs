@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use lattice_core::{
-    Actor, Decision, Event, EventFilter, EventPayload, LLMClient, SessionId, SessionStore,
+    Actor, Decision, Event, EventFilter, EventPayload, ExecutionContext, LLMClient, SessionId,
+    SessionStore,
 };
 use tracing::{info, instrument, warn};
 
@@ -24,6 +25,87 @@ pub struct ControlLoop {
     tools: Arc<ToolSet>,
     system_prompt: String,
     max_iterations: usize,
+    depth: u32,
+}
+
+/// Fluent builder for [`ControlLoop`].
+pub struct ControlLoopBuilder {
+    store: Option<Arc<dyn SessionStore>>,
+    llm: Option<Arc<dyn LLMClient>>,
+    tools: Option<Arc<ToolSet>>,
+    system_prompt: Option<String>,
+    max_iterations: Option<usize>,
+    depth: Option<u32>,
+}
+
+impl Default for ControlLoopBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ControlLoopBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            store: None,
+            llm: None,
+            tools: None,
+            system_prompt: None,
+            max_iterations: None,
+            depth: None,
+        }
+    }
+
+    #[must_use]
+    pub fn store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    #[must_use]
+    pub fn llm(mut self, llm: Arc<dyn LLMClient>) -> Self {
+        self.llm = Some(llm);
+        self
+    }
+
+    #[must_use]
+    pub fn tools(mut self, tools: Arc<ToolSet>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    #[must_use]
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    #[must_use]
+    pub fn max_iterations(mut self, max_iterations: usize) -> Self {
+        self.max_iterations = Some(max_iterations);
+        self
+    }
+
+    #[must_use]
+    pub fn depth(mut self, depth: u32) -> Self {
+        self.depth = Some(depth);
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> ControlLoop {
+        ControlLoop {
+            store: self.store.expect("store required"),
+            llm: self.llm.expect("llm required"),
+            tools: self.tools.expect("tools required"),
+            system_prompt: self
+                .system_prompt
+                .unwrap_or_else(|| "You are a helpful agent.".to_string()),
+            max_iterations: self.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS),
+            depth: self.depth.unwrap_or(0),
+        }
+    }
 }
 
 impl ControlLoop {
@@ -39,6 +121,7 @@ impl ControlLoop {
             tools,
             system_prompt: "You are a helpful agent.".to_string(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            depth: 0,
         }
     }
 
@@ -57,7 +140,14 @@ impl ControlLoop {
             tools,
             system_prompt,
             max_iterations,
+            depth: 0,
         }
+    }
+
+    /// Create a builder for configuring a control loop.
+    #[must_use]
+    pub fn builder() -> ControlLoopBuilder {
+        ControlLoopBuilder::new()
     }
 
     /// Get a reference to the session store.
@@ -160,8 +250,103 @@ impl ControlLoop {
                         },
                         parent_event_id: events.last().map(|e| e.event_id),
                     });
-                    self.execute_tool_call(session_id, tool, params, &mut events)
-                        .await?;
+
+                    let parent_id = events.last().map(|e| e.event_id);
+                    let req_event_id = self
+                        .store
+                        .append_event(
+                            session_id,
+                            EventPayload::ToolCallRequested {
+                                tool: tool.clone(),
+                                params: params.clone(),
+                            },
+                            Actor::LLM,
+                            parent_id,
+                        )
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    events.push(Event {
+                        event_id: req_event_id,
+                        session_id,
+                        timestamp: chrono::Utc::now(),
+                        actor: Actor::LLM,
+                        payload: EventPayload::ToolCallRequested {
+                            tool: tool.clone(),
+                            params: params.clone(),
+                        },
+                        parent_event_id: parent_id,
+                    });
+
+                    let ctx = ExecutionContext {
+                        session_id,
+                        trigger_event_id: req_event_id,
+                        store: Arc::clone(&self.store),
+                        depth: self.depth,
+                    };
+
+                    info!("executing tool: {}", tool);
+                    match self.tools.execute(&tool, params, &ctx).await {
+                        Ok(result) => {
+                            info!("tool execution succeeded: exit_code={}", result.exit_code);
+                            let result_event_id = self
+                                .store
+                                .append_event(
+                                    session_id,
+                                    EventPayload::ToolCallResult {
+                                        stdout: result.stdout.clone(),
+                                        stderr: result.stderr.clone(),
+                                        exit_code: result.exit_code,
+                                    },
+                                    Actor::Sandbox,
+                                    Some(req_event_id),
+                                )
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                            events.push(Event {
+                                event_id: result_event_id,
+                                session_id,
+                                timestamp: chrono::Utc::now(),
+                                actor: Actor::Sandbox,
+                                payload: EventPayload::ToolCallResult {
+                                    stdout: result.stdout,
+                                    stderr: result.stderr,
+                                    exit_code: result.exit_code,
+                                },
+                                parent_event_id: Some(req_event_id),
+                            });
+                        }
+                        Err(e) => {
+                            warn!("tool execution failed: {}", e);
+                            let error_str = e.to_string();
+                            let error_kind = e.kind();
+                            let error_event_id = self
+                                .store
+                                .append_event(
+                                    session_id,
+                                    EventPayload::ToolCallError {
+                                        error: error_str.clone(),
+                                        error_kind,
+                                    },
+                                    Actor::Sandbox,
+                                    Some(req_event_id),
+                                )
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                            events.push(Event {
+                                event_id: error_event_id,
+                                session_id,
+                                timestamp: chrono::Utc::now(),
+                                actor: Actor::Sandbox,
+                                payload: EventPayload::ToolCallError {
+                                    error: error_str,
+                                    error_kind,
+                                },
+                                parent_event_id: Some(req_event_id),
+                            });
+                        }
+                    }
                     info!("tool call completed, continuing loop");
                 }
                 Decision::MultiToolCall { calls } => {
@@ -203,8 +388,18 @@ impl ControlLoop {
                     // 2. Execute all tools sequentially, recording results or errors
                     for (call, req_event_id) in calls.iter().zip(request_ids) {
                         info!("executing tool: {}", call.tool);
+                        let ctx = ExecutionContext {
+                            session_id,
+                            trigger_event_id: req_event_id,
+                            store: Arc::clone(&self.store),
+                            depth: self.depth,
+                        };
 
-                        match self.tools.execute(&call.tool, call.params.clone()).await {
+                        match self
+                            .tools
+                            .execute(&call.tool, call.params.clone(), &ctx)
+                            .await
+                        {
                             Ok(result) => {
                                 info!("tool execution succeeded: exit_code={}", result.exit_code);
                                 let result_event_id = self
@@ -423,8 +618,8 @@ mod tests {
 
     use async_trait::async_trait;
     use lattice_core::{
-        Actor, Decision, Event, EventFilter, EventPayload, ExecutionResult, LLMClient, LLMError,
-        SessionId, SessionStore, ToolDescription,
+        Actor, ChildSessionInfo, Decision, Event, EventFilter, EventPayload, ExecutionContext,
+        ExecutionResult, LLMClient, LLMError, SessionId, SessionStore, ToolDescription,
     };
 
     use lattice_core::ToolError;
@@ -513,6 +708,21 @@ mod tests {
             }
             Ok(result)
         }
+        async fn create_child_session(
+            &self,
+            _parent_session_id: SessionId,
+            _skill_name: &str,
+        ) -> Result<(SessionId, Arc<dyn SessionStore>), lattice_core::error::StoreError> {
+            let child = Arc::new(TestStore::new());
+            let child_id = child.create_session().await?;
+            Ok((child_id, child))
+        }
+        async fn child_sessions(
+            &self,
+            _parent_session_id: SessionId,
+        ) -> Result<Vec<ChildSessionInfo>, lattice_core::error::StoreError> {
+            Ok(Vec::new())
+        }
         async fn latest_event_id(
             &self,
             session_id: SessionId,
@@ -583,7 +793,11 @@ mod tests {
             }
         }
 
-        async fn execute(&self, _params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+            _ctx: &ExecutionContext,
+        ) -> Result<ExecutionResult, ToolError> {
             Ok(ExecutionResult {
                 stdout: "ok".to_string(),
                 stderr: String::new(),
@@ -612,6 +826,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: serde_json::Value,
+                _ctx: &ExecutionContext,
             ) -> Result<ExecutionResult, ToolError> {
                 Ok(ExecutionResult {
                     stdout: "noop executed".into(),
@@ -901,6 +1116,113 @@ mod tests {
         assert_eq!(result, "done");
     }
 
+    #[test]
+    fn builder_default_depth_is_zero() {
+        let loop_ = crate::ControlLoop::builder()
+            .store(Arc::new(TestStore::new()))
+            .llm(Arc::new(TestLLM::new(Decision::FinalAnswer {
+                answer: "x".into(),
+            })))
+            .tools(Arc::new(ToolSet::new()))
+            .build();
+        assert_eq!(loop_.depth, 0);
+    }
+
+    #[test]
+    fn builder_depth_override() {
+        let loop_ = crate::ControlLoop::builder()
+            .store(Arc::new(TestStore::new()))
+            .llm(Arc::new(TestLLM::new(Decision::FinalAnswer {
+                answer: "x".into(),
+            })))
+            .tools(Arc::new(ToolSet::new()))
+            .depth(3)
+            .build();
+        assert_eq!(loop_.depth, 3);
+    }
+
+    #[tokio::test]
+    async fn execution_context_passed_to_tool() {
+        static CAPTURED_CTX: std::sync::OnceLock<ExecutionContext> = std::sync::OnceLock::new();
+
+        struct CapturingTool;
+
+        #[async_trait]
+        impl ToolExecutor for CapturingTool {
+            fn description(&self) -> ToolDescription {
+                ToolDescription {
+                    name: "capture".into(),
+                    description: "captures ctx".into(),
+                    parameters_schema: serde_json::json!({}),
+                }
+            }
+
+            async fn execute(
+                &self,
+                _params: serde_json::Value,
+                ctx: &ExecutionContext,
+            ) -> Result<ExecutionResult, ToolError> {
+                let _ = CAPTURED_CTX.set(ctx.clone());
+                Ok(ExecutionResult {
+                    stdout: "ok".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                })
+            }
+        }
+
+        struct TwoStepLLM(Arc<Mutex<bool>>);
+
+        impl TwoStepLLM {
+            fn new() -> Self {
+                Self(Arc::new(Mutex::new(false)))
+            }
+        }
+
+        #[async_trait]
+        impl LLMClient for TwoStepLLM {
+            async fn decide(
+                &self,
+                _history: &[Event],
+                _available_tools: &[ToolDescription],
+                _system_prompt: &str,
+            ) -> Result<Decision, LLMError> {
+                let mut called = self.0.lock().unwrap();
+                if !*called {
+                    *called = true;
+                    Ok(Decision::ToolCall {
+                        tool: "capture".into(),
+                        params: serde_json::json!({}),
+                    })
+                } else {
+                    Ok(Decision::FinalAnswer {
+                        answer: "done".into(),
+                    })
+                }
+            }
+        }
+
+        let session_id = SessionId::new_v4();
+        let store = Arc::new(TestStore::new());
+        insert_test_session(&store, session_id);
+
+        let mut tools = ToolSet::new();
+        tools.register(CapturingTool).unwrap();
+
+        let loop_ = crate::ControlLoop::builder()
+            .store(store)
+            .llm(Arc::new(TwoStepLLM::new()))
+            .tools(Arc::new(tools))
+            .depth(5)
+            .build();
+
+        loop_.run(session_id).await.unwrap();
+
+        let ctx = CAPTURED_CTX.get().expect("ctx was captured");
+        assert_eq!(ctx.depth, 5);
+        assert_eq!(ctx.session_id, session_id);
+    }
+
     #[tokio::test]
     async fn test_store_get_events_error_returns_error_event() {
         let session_id = SessionId::new_v4();
@@ -957,6 +1279,22 @@ mod tests {
                 filter: &EventFilter,
             ) -> Result<Vec<Event>, lattice_core::error::StoreError> {
                 self.inner.get_events(session_id, filter).await
+            }
+            async fn create_child_session(
+                &self,
+                parent_session_id: SessionId,
+                skill_name: &str,
+            ) -> Result<(SessionId, Arc<dyn SessionStore>), lattice_core::error::StoreError>
+            {
+                self.inner
+                    .create_child_session(parent_session_id, skill_name)
+                    .await
+            }
+            async fn child_sessions(
+                &self,
+                parent_session_id: SessionId,
+            ) -> Result<Vec<ChildSessionInfo>, lattice_core::error::StoreError> {
+                self.inner.child_sessions(parent_session_id).await
             }
             async fn latest_event_id(
                 &self,
@@ -1066,6 +1404,24 @@ mod tests {
                 // Increment call counter
                 *self.get_events_call_count.lock().unwrap() += 1;
                 self.inner.get_events(session_id, filter).await
+            }
+
+            async fn create_child_session(
+                &self,
+                parent_session_id: SessionId,
+                skill_name: &str,
+            ) -> Result<(SessionId, Arc<dyn SessionStore>), lattice_core::error::StoreError>
+            {
+                self.inner
+                    .create_child_session(parent_session_id, skill_name)
+                    .await
+            }
+
+            async fn child_sessions(
+                &self,
+                parent_session_id: SessionId,
+            ) -> Result<Vec<ChildSessionInfo>, lattice_core::error::StoreError> {
+                self.inner.child_sessions(parent_session_id).await
             }
 
             async fn latest_event_id(

@@ -1,0 +1,24 @@
+[package]
+name = "lattice-skill"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lattice-core = { path = "../core" }
+lattice-tools = { path = "../tools" }
+lattice-runtime = { path = "../runtime" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+indexmap = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+lattice-store-memory = { path = "../store-memory" }
+tempfile = { workspace = true }

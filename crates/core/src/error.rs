@@ -67,6 +67,9 @@ pub enum ToolError {
     /// Tool execution failed.
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
+    /// Maximum skill nesting depth exceeded.
+    #[error("max skill depth {0} exceeded")]
+    MaxDepthExceeded(u32),
     /// Execution timed out.
     #[error("timeout after {timeout_secs}s")]
     Timeout { timeout_secs: u64 },
@@ -146,6 +149,9 @@ mod tests {
 
         let err = ToolError::ExecutionFailed("segfault".to_string());
         assert_eq!(err.to_string(), "execution failed: segfault");
+
+        let err = ToolError::MaxDepthExceeded(8);
+        assert_eq!(err.to_string(), "max skill depth 8 exceeded");
 
         let err = ToolError::Timeout { timeout_secs: 60 };
         assert!(err.to_string().contains("60"));

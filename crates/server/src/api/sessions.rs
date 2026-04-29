@@ -689,6 +689,8 @@ async fn get_status(
             lattice_core::EventPayload::ToolCallResult { .. } => "toolCallResult",
             lattice_core::EventPayload::ToolCallError { .. } => "toolCallError",
             lattice_core::EventPayload::FinalAnswer { .. } => "finalAnswer",
+            lattice_core::EventPayload::SkillInvoked { .. } => "skillInvoked",
+            lattice_core::EventPayload::SkillCompleted { .. } => "skillCompleted",
             lattice_core::EventPayload::StateChange { .. } => "stateChange",
         };
         LatestEventInfo {
@@ -768,6 +770,8 @@ fn payload_type_from_query(event_type: &str) -> Option<&'static str> {
         "toolCallRequested" => Some("toolCallRequested"),
         "toolCallResult" => Some("toolCallResult"),
         "toolCallError" => Some("toolCallError"),
+        "skillInvoked" => Some("skillInvoked"),
+        "skillCompleted" => Some("skillCompleted"),
         "finalAnswer" => Some("finalAnswer"),
         "stateChange" => Some("stateChange"),
         _ => None,

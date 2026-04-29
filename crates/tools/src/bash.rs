@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lattice_core::{ExecutionResult, Sandbox, ToolDescription, ToolError, ToolExecutor};
+use lattice_core::{
+    ExecutionContext, ExecutionResult, Sandbox, ToolDescription, ToolError, ToolExecutor,
+};
 
 /// Bash tool — delegates command execution to a Sandbox.
 ///
@@ -66,7 +68,11 @@ impl ToolExecutor for BashTool {
         }
     }
 
-    async fn execute(&self, params: serde_json::Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
@@ -89,7 +95,10 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use lattice_core::{ExecutionResult, Sandbox, SandboxError, ToolError, ToolExecutor};
+    use lattice_core::{
+        Actor, ChildSessionInfo, Event, EventFilter, EventPayload, ExecutionContext,
+        ExecutionResult, Sandbox, SandboxError, SessionId, StoreError, ToolError, ToolExecutor,
+    };
 
     use crate::bash::BashTool;
 
@@ -115,6 +124,64 @@ mod tests {
         }
     }
 
+    struct MockStore;
+
+    #[async_trait]
+    impl lattice_core::SessionStore for MockStore {
+        async fn create_session(&self) -> Result<SessionId, StoreError> {
+            Ok(SessionId::new_v4())
+        }
+
+        async fn append_event(
+            &self,
+            _session_id: SessionId,
+            _payload: EventPayload,
+            _actor: Actor,
+            _parent_event_id: Option<lattice_core::EventId>,
+        ) -> Result<lattice_core::EventId, StoreError> {
+            Ok(lattice_core::EventId::new_v4())
+        }
+
+        async fn get_events(
+            &self,
+            _session_id: SessionId,
+            _filter: &EventFilter,
+        ) -> Result<Vec<Event>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_child_session(
+            &self,
+            _parent_session_id: SessionId,
+            _skill_name: &str,
+        ) -> Result<(SessionId, Arc<dyn lattice_core::SessionStore>), StoreError> {
+            Ok((SessionId::new_v4(), Arc::new(MockStore)))
+        }
+
+        async fn child_sessions(
+            &self,
+            _parent_session_id: SessionId,
+        ) -> Result<Vec<ChildSessionInfo>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn latest_event_id(
+            &self,
+            _session_id: SessionId,
+        ) -> Result<Option<lattice_core::EventId>, StoreError> {
+            Ok(None)
+        }
+    }
+
+    fn test_ctx() -> ExecutionContext {
+        ExecutionContext {
+            session_id: SessionId::new_v4(),
+            trigger_event_id: lattice_core::EventId::new_v4(),
+            store: Arc::new(MockStore),
+            depth: 0,
+        }
+    }
+
     #[tokio::test]
     async fn bash_tool_executes_via_sandbox() {
         let sandbox: Arc<dyn Sandbox> = Arc::new(MockSandbox::new(Ok(ExecutionResult {
@@ -125,7 +192,7 @@ mod tests {
         let tool = BashTool::new(sandbox);
 
         let result: ExecutionResult = tool
-            .execute(serde_json::json!({ "command": "echo hello" }))
+            .execute(serde_json::json!({ "command": "echo hello" }), &test_ctx())
             .await
             .unwrap();
         assert_eq!(result.stdout, "hello");
@@ -141,7 +208,7 @@ mod tests {
         })));
         let tool = BashTool::new(sandbox);
 
-        let result = tool.execute(serde_json::json!({})).await;
+        let result = tool.execute(serde_json::json!({}), &test_ctx()).await;
         let err = result.unwrap_err();
         assert!(matches!(err, ToolError::InvalidParams(_)));
         assert!(err.to_string().contains("command"));
@@ -156,7 +223,9 @@ mod tests {
         })));
         let tool = BashTool::new(sandbox);
 
-        let result = tool.execute(serde_json::json!({ "command": 123 })).await;
+        let result = tool
+            .execute(serde_json::json!({ "command": 123 }), &test_ctx())
+            .await;
         let err = result.unwrap_err();
         assert!(matches!(err, ToolError::InvalidParams(_)));
     }
@@ -169,7 +238,7 @@ mod tests {
         let tool = BashTool::new(sandbox);
 
         let result = tool
-            .execute(serde_json::json!({ "command": "sleep 10" }))
+            .execute(serde_json::json!({ "command": "sleep 10" }), &test_ctx())
             .await;
         let err = result.unwrap_err();
         assert!(matches!(err, ToolError::ExecutionFailed(_)));
