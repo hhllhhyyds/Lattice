@@ -182,6 +182,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_missing_session() {
+        let store = MemoryStore::new();
+        let missing = SessionId::new_v4();
+
+        let err = store.delete_session(missing).await.unwrap_err();
+        assert!(matches!(err, StoreError::SessionNotFound(id) if id == missing));
+    }
+
+    #[tokio::test]
     async fn test_filter_by_actor() {
         let store = MemoryStore::new();
         let id = store.create_session().await.unwrap();

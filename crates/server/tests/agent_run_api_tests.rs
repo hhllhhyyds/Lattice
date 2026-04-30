@@ -254,6 +254,50 @@ async fn delete_session_not_found_returns_404() {
 }
 
 #[tokio::test]
+async fn delete_running_session_aborts_and_removes_it() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let submit_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"delete while running"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{session_id}/status"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn post_message_session_not_found_returns_404() {
     let app = make_app();
     let fake_id = "00000000-0000-0000-0000-000000000000";
