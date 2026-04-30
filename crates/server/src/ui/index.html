@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lattice Console</title>
+    <link rel="stylesheet" href="/ui/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div>
+            <p class="eyebrow">Lattice</p>
+            <h1>Console</h1>
+          </div>
+          <button id="create-session-btn" class="primary-button" type="button">
+            新建会话
+          </button>
+        </div>
+
+        <form id="session-form" class="panel stack-sm">
+          <label class="field">
+            <span>会话名称</span>
+            <input id="session-name" type="text" placeholder="可选，例如 Debug run" />
+          </label>
+        </form>
+
+        <div class="panel stack-sm">
+          <div class="panel-title-row">
+            <h2>会话列表</h2>
+            <button id="refresh-sessions-btn" class="ghost-button icon-button" type="button" title="刷新会话列表">
+              ↻
+            </button>
+          </div>
+          <div id="session-list" class="session-list empty-state">
+            还没有会话，先创建一个。
+          </div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="chat-column">
+          <div class="panel panel-fill">
+            <div class="panel-title-row">
+              <div>
+                <p id="active-session-label" class="eyebrow">未选择会话</p>
+                <h2>消息</h2>
+              </div>
+              <div id="status-chip" class="status-chip idle">idle</div>
+            </div>
+            <div id="message-list" class="message-list empty-state">
+              创建或选择一个会话后，可以在这里查看消息历史。
+            </div>
+          </div>
+
+          <form id="message-form" class="panel stack-md">
+            <div class="grid-two">
+              <label class="field">
+                <span>Provider</span>
+                <select id="provider">
+                  <option value="">使用服务端默认值</option>
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>模型</span>
+                <input id="model" type="text" placeholder="可选，例如 gpt-4o" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>问题</span>
+              <textarea
+                id="message-input"
+                rows="4"
+                placeholder="向当前会话发送消息，服务端会触发一次新的 agent run。"
+              ></textarea>
+            </label>
+
+            <div class="composer-footer">
+              <label class="field narrow">
+                <span>最大迭代</span>
+                <input id="max-iterations" type="number" min="1" placeholder="默认 50" />
+              </label>
+              <button id="send-btn" class="primary-button" type="submit">发送消息</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="detail-column">
+          <div class="panel stack-sm">
+            <div class="panel-title-row">
+              <h2>运行状态</h2>
+              <button id="refresh-detail-btn" class="ghost-button icon-button" type="button" title="刷新当前会话">
+                ↻
+              </button>
+            </div>
+            <dl id="status-summary" class="status-summary">
+              <div><dt>会话</dt><dd>-</dd></div>
+              <div><dt>开始时间</dt><dd>-</dd></div>
+              <div><dt>结束时间</dt><dd>-</dd></div>
+              <div><dt>事件数</dt><dd>-</dd></div>
+              <div><dt>最新事件</dt><dd>-</dd></div>
+            </dl>
+          </div>
+
+          <div class="panel panel-fill stack-sm">
+            <div class="panel-title-row">
+              <h2>事件</h2>
+              <span id="event-count-badge" class="meta-pill">0</span>
+            </div>
+            <div id="event-list" class="event-list empty-state">
+              事件流会显示在这里。
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>

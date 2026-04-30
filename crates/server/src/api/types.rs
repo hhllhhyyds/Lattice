@@ -30,6 +30,9 @@ pub struct SessionResponse {
     pub session_id: SessionId,
     /// When the session was created.
     pub created_at: DateTime<Utc>,
+    /// Optional session metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SessionMetadata>,
     /// Current session status.
     pub status: SessionStatus,
     /// Total number of events in the session.

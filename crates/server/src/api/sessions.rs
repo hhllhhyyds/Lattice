@@ -84,13 +84,14 @@ async fn create_session(
         sessions.push(SessionInfo {
             session_id,
             created_at,
-            metadata,
+            metadata: metadata.clone(),
         });
     }
 
     let response = SessionResponse {
         session_id,
         created_at,
+        metadata,
         status: SessionStatus::Created,
         event_count: 1,
         run_info: None,
@@ -127,6 +128,7 @@ async fn list_sessions(
         responses.push(SessionResponse {
             session_id: info.session_id,
             created_at: info.created_at,
+            metadata: info.metadata.clone(),
             status,
             event_count,
             run_info: None,
@@ -169,6 +171,7 @@ async fn get_session(
     Ok(Json(SessionResponse {
         session_id,
         created_at: info.created_at,
+        metadata: info.metadata,
         status,
         event_count,
         run_info,
