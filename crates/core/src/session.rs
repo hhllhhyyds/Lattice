@@ -13,6 +13,9 @@ pub trait SessionStore: Send + Sync {
     /// Create a new session and return its id.
     async fn create_session(&self) -> Result<SessionId, StoreError>;
 
+    /// Delete an entire session and all of its events.
+    async fn delete_session(&self, session_id: SessionId) -> Result<(), StoreError>;
+
     /// Append an immutable event to the session.
     ///
     /// Returns the newly assigned `EventId`.

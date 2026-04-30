@@ -56,6 +56,15 @@ impl SessionStore for MemoryStore {
         Ok(session_id)
     }
 
+    async fn delete_session(&self, session_id: SessionId) -> Result<(), StoreError> {
+        let mut sessions = self.sessions.write().await;
+        if sessions.remove(&session_id).is_some() {
+            Ok(())
+        } else {
+            Err(StoreError::SessionNotFound(session_id))
+        }
+    }
+
     /// Appends an immutable event to the session's event log.
     async fn append_event(
         &self,
@@ -156,6 +165,20 @@ mod tests {
             events[1].payload,
             EventPayload::UserMessage { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_delete_session() {
+        let store = MemoryStore::new();
+        let id = store.create_session().await.unwrap();
+
+        store.delete_session(id).await.unwrap();
+
+        let err = store
+            .get_events(id, &EventFilter::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::SessionNotFound(_)));
     }
 
     #[tokio::test]

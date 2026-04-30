@@ -405,6 +405,17 @@ mod tests {
                 .insert(session_id, vec![event]);
             Ok(session_id)
         }
+        async fn delete_session(
+            &self,
+            session_id: SessionId,
+        ) -> Result<(), lattice_core::error::StoreError> {
+            let removed = self.sessions.lock().unwrap().remove(&session_id);
+            if removed.is_some() {
+                Ok(())
+            } else {
+                Err(lattice_core::error::StoreError::SessionNotFound(session_id))
+            }
+        }
         async fn append_event(
             &self,
             session_id: SessionId,
@@ -858,6 +869,12 @@ mod tests {
             async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
                 self.inner.create_session().await
             }
+            async fn delete_session(
+                &self,
+                session_id: SessionId,
+            ) -> Result<(), lattice_core::error::StoreError> {
+                self.inner.delete_session(session_id).await
+            }
             async fn append_event(
                 &self,
                 _session_id: SessionId,
@@ -954,6 +971,12 @@ mod tests {
         impl lattice_core::SessionStore for CallCountingStore {
             async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
                 self.inner.create_session().await
+            }
+            async fn delete_session(
+                &self,
+                session_id: SessionId,
+            ) -> Result<(), lattice_core::error::StoreError> {
+                self.inner.delete_session(session_id).await
             }
 
             async fn append_event(

@@ -232,6 +232,13 @@ button:focus-visible {
   cursor: pointer;
 }
 
+.session-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .session-card.active {
   border-color: var(--primary);
   background: #eef4ff;
@@ -244,6 +251,24 @@ button:focus-visible {
 .session-title {
   font-weight: 600;
   margin: 0 0 4px;
+}
+
+.session-delete {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.session-delete:hover {
+  background: #fdecea;
+  color: var(--danger);
 }
 
 .session-meta {

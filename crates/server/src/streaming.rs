@@ -58,6 +58,12 @@ impl EventHub {
         };
         let _ = sender.send(event.clone());
     }
+
+    /// Remove and drop the channel for a deleted session.
+    pub async fn remove_session(&self, session_id: SessionId) {
+        let mut channels = self.channels.write().await;
+        channels.remove(&session_id);
+    }
 }
 
 /// SessionStore decorator that broadcasts newly appended events.
@@ -77,6 +83,12 @@ impl NotifyingStore {
 impl SessionStore for NotifyingStore {
     async fn create_session(&self) -> Result<SessionId, lattice_core::StoreError> {
         self.inner.create_session().await
+    }
+
+    async fn delete_session(&self, session_id: SessionId) -> Result<(), lattice_core::StoreError> {
+        self.inner.delete_session(session_id).await?;
+        self.hub.remove_session(session_id).await;
+        Ok(())
     }
 
     async fn append_event(
