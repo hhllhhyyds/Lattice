@@ -13,10 +13,6 @@ use crate::request::ToolSpec;
 pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
     let mut messages: Vec<Message> = Vec::new();
 
-    // Track the last tool call event id so we can correlate ToolResult
-    // with the correct tool_use_id.
-    let mut last_tool_call_id: Option<String> = None;
-
     for event in events {
         match &event.payload {
             EventPayload::UserMessage { content } => {
@@ -29,7 +25,6 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
             }
             EventPayload::ToolCallRequested { tool, params } => {
                 let id = event.event_id.to_string();
-                last_tool_call_id = Some(id.clone());
                 messages.push(Message {
                     role: Role::Assistant,
                     content: vec![ContentBlock::ToolUse {
@@ -44,7 +39,7 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
                 stderr,
                 exit_code,
             } => {
-                let tool_use_id = last_tool_call_id.clone().unwrap_or_default();
+                let tool_use_id = tool_use_id_from_parent(event);
                 let content = format_tool_result(stdout, stderr, *exit_code);
                 messages.push(Message {
                     role: Role::Tool,
@@ -56,7 +51,7 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
                 });
             }
             EventPayload::ToolCallError { error } => {
-                let tool_use_id = last_tool_call_id.clone().unwrap_or_default();
+                let tool_use_id = tool_use_id_from_parent(event);
                 messages.push(Message {
                     role: Role::Tool,
                     content: vec![ContentBlock::ToolResult {
@@ -75,6 +70,13 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
     }
 
     messages
+}
+
+fn tool_use_id_from_parent(event: &Event) -> String {
+    event
+        .parent_event_id
+        .map(|id| id.to_string())
+        .unwrap_or_default()
 }
 
 /// Convert Lattice tool descriptions into protocol tool specs.
@@ -110,13 +112,17 @@ mod tests {
     use uuid::Uuid;
 
     fn make_event(payload: EventPayload) -> Event {
+        make_event_with_parent(payload, None)
+    }
+
+    fn make_event_with_parent(payload: EventPayload, parent_event_id: Option<EventId>) -> Event {
         Event {
             event_id: EventId::new_v4(),
             session_id: SessionId::new_v4(),
             timestamp: Utc::now(),
             actor: Actor::System,
             payload,
-            parent_event_id: None,
+            parent_event_id,
         }
     }
 
@@ -162,11 +168,14 @@ mod tests {
                 },
                 parent_event_id: None,
             },
-            make_event(EventPayload::ToolCallResult {
-                stdout: "hi\n".into(),
-                stderr: String::new(),
-                exit_code: 0,
-            }),
+            make_event_with_parent(
+                EventPayload::ToolCallResult {
+                    stdout: "hi\n".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+                Some(tool_event_id),
+            ),
         ];
         let messages = events_to_messages(&events);
         assert_eq!(messages.len(), 2);
@@ -200,25 +209,101 @@ mod tests {
 
     #[test]
     fn test_tool_call_error_conversion() {
+        let tool_event_id = EventId::new_v4();
         let events = vec![
-            make_event(EventPayload::ToolCallRequested {
-                tool: "bash".into(),
-                params: serde_json::json!({"command": "fail"}),
-            }),
-            make_event(EventPayload::ToolCallError {
-                error: "command not found".into(),
-            }),
+            Event {
+                event_id: tool_event_id,
+                session_id: SessionId::new_v4(),
+                timestamp: Utc::now(),
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "fail"}),
+                },
+                parent_event_id: None,
+            },
+            make_event_with_parent(
+                EventPayload::ToolCallError {
+                    error: "command not found".into(),
+                },
+                Some(tool_event_id),
+            ),
         ];
         let messages = events_to_messages(&events);
         assert_eq!(messages.len(), 2);
         match &messages[1].content[0] {
             ContentBlock::ToolResult {
-                content, is_error, ..
+                tool_use_id,
+                content,
+                is_error,
             } => {
+                assert_eq!(tool_use_id, &tool_event_id.to_string());
                 assert_eq!(content, "command not found");
                 assert!(is_error);
             }
             _ => panic!("expected tool result block"),
+        }
+    }
+
+    #[test]
+    fn test_tool_results_use_parent_event_id_when_out_of_order() {
+        let first_tool_event_id = EventId::new_v4();
+        let second_tool_event_id = EventId::new_v4();
+        let session_id = SessionId::new_v4();
+        let events = vec![
+            Event {
+                event_id: first_tool_event_id,
+                session_id,
+                timestamp: Utc::now(),
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "ls"}),
+                },
+                parent_event_id: None,
+            },
+            Event {
+                event_id: second_tool_event_id,
+                session_id,
+                timestamp: Utc::now(),
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "pwd"}),
+                },
+                parent_event_id: None,
+            },
+            make_event_with_parent(
+                EventPayload::ToolCallResult {
+                    stdout: "ls output".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+                Some(first_tool_event_id),
+            ),
+            make_event_with_parent(
+                EventPayload::ToolCallResult {
+                    stdout: "pwd output".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+                Some(second_tool_event_id),
+            ),
+        ];
+
+        let messages = events_to_messages(&events);
+
+        match &messages[2].content[0] {
+            ContentBlock::ToolResult { tool_use_id, .. } => {
+                assert_eq!(tool_use_id, &first_tool_event_id.to_string());
+            }
+            _ => panic!("expected first tool result block"),
+        }
+        match &messages[3].content[0] {
+            ContentBlock::ToolResult { tool_use_id, .. } => {
+                assert_eq!(tool_use_id, &second_tool_event_id.to_string());
+            }
+            _ => panic!("expected second tool result block"),
         }
     }
 

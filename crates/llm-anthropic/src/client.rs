@@ -9,7 +9,7 @@ use lattice_core::{Event, ToolDescription};
 use lattice_llm_protocol::convert::{events_to_messages, tool_descriptions_to_specs};
 use lattice_llm_protocol::message::{ContentBlock, Message, Role};
 use lattice_llm_protocol::response::LLMResponse;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::types::*;
 
@@ -71,15 +71,20 @@ impl AnthropicClient {
     fn to_anthropic_messages(&self, messages: &[Message]) -> Vec<AnthropicMessage> {
         messages
             .iter()
-            .map(|msg| {
+            .filter_map(|msg| {
                 let role = match msg.role {
                     Role::User | Role::Tool => "user".to_string(),
                     Role::Assistant => "assistant".to_string(),
-                    Role::System => "user".to_string(), // system is handled separately
+                    Role::System => {
+                        warn!(
+                            "system-role message found in Anthropic conversation history; skipping"
+                        );
+                        return None;
+                    }
                 };
 
                 let content = self.to_anthropic_content(&msg.content, msg.role);
-                AnthropicMessage { role, content }
+                Some(AnthropicMessage { role, content })
             })
             .collect()
     }
@@ -353,11 +358,30 @@ mod tests {
     #[test]
     fn test_to_anthropic_messages_system() {
         let client = AnthropicClient::new("key", "claude");
-        // System role maps to "user" (system prompt handled separately in decide())
+        // System prompt is handled by the top-level request field, not history.
         let messages = vec![Message::text(Role::System, "instructions")];
         let result = client.to_anthropic_messages(&messages);
-        assert_eq!(result.len(), 1);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_to_anthropic_messages_skips_system_without_dropping_neighbors() {
+        let client = AnthropicClient::new("key", "claude");
+        let messages = vec![
+            Message::text(Role::User, "hello"),
+            Message::text(Role::System, "must not become user content"),
+            Message::text(Role::Assistant, "hi"),
+        ];
+
+        let result = client.to_anthropic_messages(&messages);
+
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0].role, "user");
+        assert_eq!(result[1].role, "assistant");
+        assert!(result.iter().all(|msg| match &msg.content {
+            AnthropicContent::Text(text) => !text.contains("must not become user content"),
+            AnthropicContent::Blocks(_) => true,
+        }));
     }
 
     #[test]

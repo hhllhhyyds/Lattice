@@ -91,6 +91,117 @@ cargo run -p lattice-server
 curl http://localhost:3000/health
 ```
 
+启动后直接打开浏览器访问：
+
+```text
+http://127.0.0.1:3000
+```
+
+当前主干内置了一个最小可用 Web UI，可用于：
+
+- 创建 session
+- 提交消息并触发 agent run
+- 查看消息历史
+- 查看事件列表
+- 查看运行状态
+
+Web UI 现在已经接入会话级 **SSE 实时事件流**：
+
+- 进入会话时会先回放已有历史事件
+- 新事件会实时推送到页面
+- 消息区、事件区、状态区会自动更新
+- 不需要前端持续轮询 `status` / `events` / `messages`
+
+如果要让 Web UI 真正调用模型，需要先配置服务端使用的 LLM 环境变量，例如：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:OPENAI_API_KEY="sk-xxx"
+$env:LATTICE_MODEL="gpt-4o"
+cargo run -p lattice-server
+```
+
+### Web UI 使用说明
+
+Web UI 底部的发送面板里：
+
+- `Provider` 是**可选项**
+- `模型` 是**可选项**
+
+它们的行为是：
+
+- **不填写 `Provider` / `模型`**  
+  本次请求直接使用服务端启动时的默认环境变量
+- **填写 `Provider` / `模型`**  
+  仅覆盖这一次请求的 provider / model
+
+也就是说，如果你在启动 `lattice-server` 前已经设置好了：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_BASE="https://api.siliconflow.cn/v1"
+$env:LATTICE_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
+```
+
+那么进入 Web UI 后，`Provider` 和 `模型` 两个输入框都可以留空，直接发送消息即可。
+
+### Web UI 实时效果
+
+启动 `lattice-server` 后，打开浏览器：
+
+```text
+http://127.0.0.1:3000
+```
+
+然后：
+
+1. 创建一个 session
+2. 发送一条消息
+3. 直接观察页面
+
+你会看到：
+
+- 消息区自动追加 user / assistant 消息
+- 事件区实时出现 `userMessage`、`thinking`、`toolCallRequested`、`toolCallResult`、`finalAnswer`
+- 状态从 `running` 自动变成 `completed`
+
+这套刷新机制来自后端的 `/v1/sessions/:id/stream` SSE 接口，而不是前端定时轮询。
+
+### MiniMax / SiliconFlow 示例
+
+Lattice 当前通过 **OpenAI-compatible** 适配器接入 MiniMax、SiliconFlow、vLLM、Ollama 等服务。
+
+这里的：
+
+```text
+LATTICE_LLM_PROVIDER="openai"
+```
+
+表示“使用 OpenAI 兼容请求格式”，**不是**要求你使用 OpenAI 官方服务。
+
+例如，通过 SiliconFlow 调用 MiniMax：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_API_BASE="https://api.siliconflow.cn/v1"
+$env:LATTICE_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
+$env:LATTICE_PORT="3001"
+
+cargo run -p lattice-server
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:3001
+```
+
+如果服务端已经按上面方式启动，Web UI 中推荐：
+
+- `Provider` 留空（使用服务端默认值）
+- `模型` 留空，或显式填写 `Pro/MiniMaxAI/MiniMax-M2.5`
+
 ## LLM Provider 支持
 
 | Provider         | 包                      | 状态 |
