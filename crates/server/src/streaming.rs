@@ -131,3 +131,62 @@ impl SessionStore for NotifyingStore {
         self.inner.latest_event_id(session_id).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lattice_core::StoreError;
+    use lattice_store_memory::MemoryStore;
+
+    #[tokio::test]
+    async fn remove_session_drops_existing_channel() {
+        let hub = EventHub::new();
+        let session_id = SessionId::new_v4();
+
+        let mut receiver = hub.subscribe(session_id).await;
+        assert!(hub.channels.read().await.contains_key(&session_id));
+
+        hub.remove_session(session_id).await;
+
+        assert!(!hub.channels.read().await.contains_key(&session_id));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn notifying_store_delete_session_removes_channel_after_store_delete() {
+        let inner: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+        let hub = Arc::new(EventHub::new());
+        let store = NotifyingStore::new(Arc::clone(&inner), Arc::clone(&hub));
+        let session_id = inner.create_session().await.unwrap();
+
+        let _receiver = hub.subscribe(session_id).await;
+        assert!(hub.channels.read().await.contains_key(&session_id));
+
+        store.delete_session(session_id).await.unwrap();
+
+        assert!(!hub.channels.read().await.contains_key(&session_id));
+        let err = inner
+            .get_events(session_id, &EventFilter::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::SessionNotFound(id) if id == session_id));
+    }
+
+    #[tokio::test]
+    async fn notifying_store_delete_missing_session_preserves_error_and_channel() {
+        let inner: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
+        let hub = Arc::new(EventHub::new());
+        let store = NotifyingStore::new(inner, Arc::clone(&hub));
+        let missing = SessionId::new_v4();
+
+        let _receiver = hub.subscribe(missing).await;
+        assert!(hub.channels.read().await.contains_key(&missing));
+
+        let err = store.delete_session(missing).await.unwrap_err();
+        assert!(matches!(err, StoreError::SessionNotFound(id) if id == missing));
+        assert!(hub.channels.read().await.contains_key(&missing));
+    }
+}
