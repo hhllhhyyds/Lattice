@@ -908,6 +908,8 @@ mod tests {
         let tools = make_tools();
 
         let failing_store = FailingAppendStore::with_session(session_id);
+        let temp_session = failing_store.create_session().await.unwrap();
+        failing_store.delete_session(temp_session).await.unwrap();
 
         let control_loop = crate::ControlLoop::with_options(
             Arc::new(failing_store),
@@ -1011,6 +1013,8 @@ mod tests {
         }
 
         let store = Arc::new(CallCountingStore::with_session(session_id));
+        let temp_session = store.create_session().await.unwrap();
+        store.delete_session(temp_session).await.unwrap();
 
         // LLM will return ToolCall twice, then FinalAnswer
         // This creates 3 iterations, which would call get_events 3 times in the old code
