@@ -186,6 +186,118 @@ async fn create_session_with_metadata_is_visible_in_session_detail_and_list() {
 }
 
 #[tokio::test]
+async fn delete_session_removes_session_and_history() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list_response.into_body(), 4096)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(!list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|session| session["sessionId"] == session_id));
+}
+
+#[tokio::test]
+async fn delete_session_not_found_returns_404() {
+    let app = make_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/sessions/00000000-0000-0000-0000-000000000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_running_session_aborts_and_removes_it() {
+    let app = make_app();
+    let session_id = create_test_session(&app).await;
+
+    let submit_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"delete while running"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{session_id}/status"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn post_message_session_not_found_returns_404() {
     let app = make_app();
     let fake_id = "00000000-0000-0000-0000-000000000000";

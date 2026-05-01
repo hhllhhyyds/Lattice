@@ -454,6 +454,7 @@ mod tests {
         let js = String::from_utf8(body.to_vec()).unwrap();
         assert!(js.contains("loadSessions"));
         assert!(js.contains("sendMessage"));
+        assert!(js.contains("deleteSession"));
     }
 
     #[tokio::test]

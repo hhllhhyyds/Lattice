@@ -405,6 +405,17 @@ mod tests {
                 .insert(session_id, vec![event]);
             Ok(session_id)
         }
+        async fn delete_session(
+            &self,
+            session_id: SessionId,
+        ) -> Result<(), lattice_core::error::StoreError> {
+            let removed = self.sessions.lock().unwrap().remove(&session_id);
+            if removed.is_some() {
+                Ok(())
+            } else {
+                Err(lattice_core::error::StoreError::SessionNotFound(session_id))
+            }
+        }
         async fn append_event(
             &self,
             session_id: SessionId,
@@ -858,6 +869,12 @@ mod tests {
             async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
                 self.inner.create_session().await
             }
+            async fn delete_session(
+                &self,
+                session_id: SessionId,
+            ) -> Result<(), lattice_core::error::StoreError> {
+                self.inner.delete_session(session_id).await
+            }
             async fn append_event(
                 &self,
                 _session_id: SessionId,
@@ -891,6 +908,8 @@ mod tests {
         let tools = make_tools();
 
         let failing_store = FailingAppendStore::with_session(session_id);
+        let temp_session = failing_store.create_session().await.unwrap();
+        failing_store.delete_session(temp_session).await.unwrap();
 
         let control_loop = crate::ControlLoop::with_options(
             Arc::new(failing_store),
@@ -955,6 +974,12 @@ mod tests {
             async fn create_session(&self) -> Result<SessionId, lattice_core::error::StoreError> {
                 self.inner.create_session().await
             }
+            async fn delete_session(
+                &self,
+                session_id: SessionId,
+            ) -> Result<(), lattice_core::error::StoreError> {
+                self.inner.delete_session(session_id).await
+            }
 
             async fn append_event(
                 &self,
@@ -988,6 +1013,8 @@ mod tests {
         }
 
         let store = Arc::new(CallCountingStore::with_session(session_id));
+        let temp_session = store.create_session().await.unwrap();
+        store.delete_session(temp_session).await.unwrap();
 
         // LLM will return ToolCall twice, then FinalAnswer
         // This creates 3 iterations, which would call get_events 3 times in the old code

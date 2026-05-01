@@ -97,10 +97,17 @@ function renderSessions(sessions) {
     button.className = `session-card${session.sessionId === state.selectedSessionId ? " active" : ""}`;
     const label = sessionTitle(session);
     button.innerHTML = `
-      <p class="session-title">${label.title}</p>
+      <div class="session-card-header">
+        <p class="session-title">${label.title}</p>
+        <span class="session-delete" data-session-id="${session.sessionId}" title="删除会话" aria-label="删除会话">×</span>
+      </div>
       <p class="session-meta">${label.meta}</p>
     `;
     button.addEventListener("click", () => selectSession(session.sessionId));
+    button.querySelector(".session-delete").addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteSession(session.sessionId).catch((error) => showToast(error.message, true));
+    });
     el.sessionList.appendChild(button);
   });
 }
@@ -406,6 +413,34 @@ async function createSession() {
   } finally {
     el.createSessionBtn.disabled = false;
   }
+}
+
+async function deleteSession(sessionId) {
+  const confirmed = window.confirm("确认删除这个会话及其全部消息和事件记录吗？");
+  if (!confirmed) {
+    return;
+  }
+
+  if (sessionId === state.selectedSessionId) {
+    closeSessionStream();
+  }
+
+  await api(`/v1/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+
+  if (sessionId === state.selectedSessionId) {
+    state.selectedSessionId = null;
+    resetCurrentSessionState();
+  }
+
+  const sessions = await loadSessions();
+  if (!state.selectedSessionId && sessions.length) {
+    state.selectedSessionId = sessions[0].sessionId;
+    await loadCurrentSession();
+  }
+
+  showToast("会话已删除");
 }
 
 async function sendMessage(event) {

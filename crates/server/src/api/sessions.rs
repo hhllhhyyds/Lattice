@@ -52,7 +52,7 @@ fn default_limit() -> usize {
 pub fn v1_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/sessions", post(create_session).get(list_sessions))
-        .route("/sessions/{id}", get(get_session))
+        .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/sessions/{id}/events", get(get_events))
         .route("/sessions/{id}/stream", get(session_stream))
         .route(
@@ -61,6 +61,39 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/run", post(trigger_run))
         .route("/sessions/{id}/status", get(get_status))
+}
+
+/// DELETE /v1/sessions/:id — deletes a session and all of its events.
+async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<SessionId>,
+) -> Result<axum::http::StatusCode, AppError> {
+    {
+        let sessions = state.sessions.read().await;
+        if !sessions.iter().any(|s| s.session_id == session_id) {
+            return Err(AppError::SessionNotFound(session_id));
+        }
+    }
+
+    {
+        let mut runs = state.active_runs.write().await;
+        if let Some(handle) = runs.remove(&session_id) {
+            handle.abort_handle.abort();
+        }
+    }
+
+    state
+        .store
+        .delete_session(session_id)
+        .await
+        .map_err(|e| AppError::InternalError(e.to_string()))?;
+
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.retain(|session| session.session_id != session_id);
+    }
+
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// POST /v1/sessions — creates a new session.
