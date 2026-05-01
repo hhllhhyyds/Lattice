@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use lattice_mcp::{McpClientManager, McpConnectionState, McpServerConfig, McpStdioServerConfig};
+use lattice_mcp::{
+    McpClientManager, McpConnectionState, McpHttpServerConfig, McpServerConfig,
+    McpStdioServerConfig, McpWebSocketServerConfig,
+};
 
 fn fixture_binary(name: &str) -> String {
     let key = format!("CARGO_BIN_EXE_{name}");
@@ -106,4 +109,94 @@ async fn reconnect_all_reestablishes_sessions() {
     let statuses = manager.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
     assert_eq!(statuses[0].tools[0].name, "hello");
+}
+
+#[tokio::test]
+async fn connect_all_marks_unsupported_http_and_ws_transports_failed() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "http-remote".to_string(),
+        McpServerConfig::Http(McpHttpServerConfig {
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+        }),
+    );
+    configs.insert(
+        "ws-remote".to_string(),
+        McpServerConfig::Ws(McpWebSocketServerConfig {
+            url: "wss://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(statuses[0].name, "http-remote");
+    assert_eq!(statuses[0].state, McpConnectionState::Failed);
+    assert_eq!(statuses[0].transport, "http");
+    assert!(statuses[0].detail.contains("unsupported MCP transport"));
+    assert!(statuses[0].tools.is_empty());
+    assert!(statuses[0].resources.is_empty());
+
+    assert_eq!(statuses[1].name, "ws-remote");
+    assert_eq!(statuses[1].state, McpConnectionState::Failed);
+    assert_eq!(statuses[1].transport, "ws");
+    assert!(statuses[1].detail.contains("unsupported MCP transport"));
+    assert!(statuses[1].tools.is_empty());
+    assert!(statuses[1].resources.is_empty());
+}
+
+#[tokio::test]
+async fn list_statuses_tools_and_resources_are_sorted_and_aggregated() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "z-fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+    configs.insert(
+        "a-http".to_string(),
+        McpServerConfig::Http(McpHttpServerConfig {
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(statuses[0].name, "a-http");
+    assert_eq!(statuses[0].state, McpConnectionState::Failed);
+    assert_eq!(statuses[1].name, "z-fixture");
+    assert_eq!(statuses[1].state, McpConnectionState::Connected);
+
+    let tools = manager.list_tools();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_name, "z-fixture");
+    assert_eq!(tools[0].name, "hello");
+
+    let resources = manager.list_resources();
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0].server_name, "z-fixture");
+    assert_eq!(resources[0].uri, "fixture://readme");
+
+    manager.close().await;
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses[0].name, "a-http");
+    assert_eq!(statuses[0].state, McpConnectionState::Pending);
+    assert!(statuses[0].tools.is_empty());
+    assert!(statuses[0].resources.is_empty());
+    assert_eq!(statuses[1].name, "z-fixture");
+    assert_eq!(statuses[1].state, McpConnectionState::Pending);
+    assert!(statuses[1].tools.is_empty());
+    assert!(statuses[1].resources.is_empty());
 }
