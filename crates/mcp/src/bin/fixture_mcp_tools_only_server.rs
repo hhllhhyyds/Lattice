@@ -31,7 +31,7 @@ impl FixtureToolsOnlyServer {
 
 #[tool_router]
 impl FixtureToolsOnlyServer {
-    #[tool(description = "Return a tools-only fixture greeting")]
+    #[tool]
     fn hello(&self, Parameters(HelloArgs { name }): Parameters<HelloArgs>) -> String {
         format!("fixture-hello:{name}")
     }

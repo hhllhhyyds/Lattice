@@ -5,11 +5,34 @@ use lattice_mcp::{
     McpClientManager, McpConnectionState, McpHttpServerConfig, McpServerConfig,
     McpStdioServerConfig, McpWebSocketServerConfig,
 };
+use rmcp::{
+    model::ReadResourceRequestParams, service::RoleClient, transport::TokioChildProcess, ServiceExt,
+};
+use tokio::process::Command;
 
 fn fixture_binary(name: &str) -> String {
     let key = format!("CARGO_BIN_EXE_{name}");
     let path = std::env::var_os(&key).unwrap_or_else(|| panic!("missing fixture binary: {key}"));
     PathBuf::from(path).to_string_lossy().into_owned()
+}
+
+async fn connect_fixture_client(
+    command: String,
+    cwd: Option<PathBuf>,
+    env: Option<HashMap<String, String>>,
+) -> rmcp::service::RunningService<RoleClient, ()> {
+    let mut process = Command::new(command);
+    if let Some(cwd) = cwd {
+        process.current_dir(cwd);
+    }
+    if let Some(env) = env {
+        process.envs(env);
+    }
+
+    let transport = TokioChildProcess::new(process).expect("fixture process should start");
+    ().serve(transport)
+        .await
+        .expect("fixture client should connect")
 }
 
 #[tokio::test]
@@ -102,7 +125,30 @@ async fn stdio_manager_tolerates_missing_resource_listing() {
     let statuses = manager.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
     assert_eq!(statuses[0].tools.len(), 1);
+    assert_eq!(statuses[0].tools[0].description, "");
     assert!(statuses[0].resources.is_empty());
+}
+
+#[tokio::test]
+async fn stdio_manager_fails_on_non_method_not_found_resource_error() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "broken-resources".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_broken_resources_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses[0].state, McpConnectionState::Failed);
+    assert_eq!(statuses[0].transport, "stdio");
+    assert!(statuses[0].detail.contains("fixture resources unavailable"));
 }
 
 #[tokio::test]
@@ -146,6 +192,32 @@ async fn reconnect_all_reestablishes_sessions() {
     let statuses = manager.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
     assert_eq!(statuses[0].tools[0].name, "hello");
+}
+
+#[tokio::test]
+async fn stdio_manager_honors_cwd_and_env_configuration() {
+    let cwd = std::env::current_dir().expect("workspace cwd should exist");
+    let mut env = HashMap::new();
+    env.insert("LATTICE_MCP_FIXTURE".to_string(), "1".to_string());
+
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: Some(env),
+            cwd: Some(cwd),
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses[0].state, McpConnectionState::Connected);
+    assert_eq!(statuses[0].resources.len(), 1);
+    assert_eq!(statuses[0].resources[0].description, "");
 }
 
 #[tokio::test]
@@ -274,4 +346,21 @@ async fn list_statuses_tools_and_resources_are_sorted_and_aggregated() {
     assert_eq!(statuses[1].state, McpConnectionState::Pending);
     assert!(statuses[1].tools.is_empty());
     assert!(statuses[1].resources.is_empty());
+}
+
+#[tokio::test]
+async fn direct_client_can_read_fixture_resource() {
+    let client = connect_fixture_client(fixture_binary("fixture_mcp_server"), None, None).await;
+
+    let resources = client
+        .list_all_resources()
+        .await
+        .expect("resource listing should succeed");
+    assert_eq!(resources.len(), 1);
+
+    let read = client
+        .read_resource(ReadResourceRequestParams::new("fixture://readme"))
+        .await
+        .expect("resource read should succeed");
+    assert_eq!(read.contents.len(), 1);
 }

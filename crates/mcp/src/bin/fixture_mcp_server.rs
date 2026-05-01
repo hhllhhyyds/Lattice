@@ -33,7 +33,6 @@ impl FixtureServer {
         ListResourcesResult {
             resources: vec![
                 rmcp::model::RawResource::new("fixture://readme", "Fixture Readme")
-                    .with_description("Fixture resource")
                     .with_audience(vec![Role::User]),
             ],
             next_cursor: None,
