@@ -13,6 +13,43 @@ fn fixture_binary(name: &str) -> String {
 }
 
 #[tokio::test]
+async fn new_manager_starts_all_servers_pending() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+    configs.insert(
+        "remote".to_string(),
+        McpServerConfig::Http(McpHttpServerConfig {
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+        }),
+    );
+
+    let manager = McpClientManager::new(configs);
+    let statuses = manager.list_statuses();
+
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(statuses[0].name, "fixture");
+    assert_eq!(statuses[0].state, McpConnectionState::Pending);
+    assert_eq!(statuses[0].transport, "stdio");
+    assert!(statuses[0].tools.is_empty());
+    assert!(statuses[0].resources.is_empty());
+
+    assert_eq!(statuses[1].name, "remote");
+    assert_eq!(statuses[1].state, McpConnectionState::Pending);
+    assert_eq!(statuses[1].transport, "http");
+    assert!(statuses[1].tools.is_empty());
+    assert!(statuses[1].resources.is_empty());
+}
+
+#[tokio::test]
 async fn stdio_manager_connects_and_discovers_tools_and_resources() {
     let mut configs = HashMap::new();
     configs.insert(
@@ -109,6 +146,44 @@ async fn reconnect_all_reestablishes_sessions() {
     let statuses = manager.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
     assert_eq!(statuses[0].tools[0].name, "hello");
+}
+
+#[tokio::test]
+async fn reconnect_all_recovers_failed_stdio_session() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: "__missing_lattice_mcp_fixture__".to_string(),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+    let statuses = manager.list_statuses();
+    assert_eq!(statuses[0].state, McpConnectionState::Failed);
+
+    let mut recovered_configs = HashMap::new();
+    recovered_configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut recovered = McpClientManager::new(recovered_configs);
+    recovered.reconnect_all().await;
+
+    let statuses = recovered.list_statuses();
+    assert_eq!(statuses[0].state, McpConnectionState::Connected);
+    assert_eq!(statuses[0].tools.len(), 1);
+    assert_eq!(statuses[0].resources.len(), 1);
 }
 
 #[tokio::test]

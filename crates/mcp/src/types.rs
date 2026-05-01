@@ -199,4 +199,49 @@ mod tests {
             "ws"
         );
     }
+
+    #[test]
+    fn connection_status_helpers_fill_expected_fields() {
+        let tool = McpToolInfo {
+            server_name: "fixture".into(),
+            name: "hello".into(),
+            description: "fixture tool".into(),
+            input_schema: Map::new(),
+        };
+        let resource = McpResourceInfo {
+            server_name: "fixture".into(),
+            name: "Fixture Readme".into(),
+            uri: "fixture://readme".into(),
+            description: "Fixture resource".into(),
+        };
+
+        let pending = McpConnectionStatus::pending("fixture", "stdio");
+        assert_eq!(pending.name, "fixture");
+        assert_eq!(pending.state, McpConnectionState::Pending);
+        assert_eq!(pending.detail, "");
+        assert_eq!(pending.transport, "stdio");
+        assert!(pending.tools.is_empty());
+        assert!(pending.resources.is_empty());
+
+        let connected = McpConnectionStatus::connected(
+            "fixture",
+            "stdio",
+            vec![tool.clone()],
+            vec![resource.clone()],
+        );
+        assert_eq!(connected.name, "fixture");
+        assert_eq!(connected.state, McpConnectionState::Connected);
+        assert_eq!(connected.detail, "");
+        assert_eq!(connected.transport, "stdio");
+        assert_eq!(connected.tools, vec![tool]);
+        assert_eq!(connected.resources, vec![resource]);
+
+        let failed = McpConnectionStatus::failed("fixture", "stdio", "boom");
+        assert_eq!(failed.name, "fixture");
+        assert_eq!(failed.state, McpConnectionState::Failed);
+        assert_eq!(failed.detail, "boom");
+        assert_eq!(failed.transport, "stdio");
+        assert!(failed.tools.is_empty());
+        assert!(failed.resources.is_empty());
+    }
 }
