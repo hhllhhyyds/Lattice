@@ -202,6 +202,58 @@ http://127.0.0.1:3001
 - `Provider` 留空（使用服务端默认值）
 - `模型` 留空，或显式填写 `Pro/MiniMaxAI/MiniMax-M2.5`
 
+### MCP 配置接入
+
+`real-agent` 和 `lattice-server` 现在都支持在启动时加载 MCP 配置，并把 MCP tools 注入 `ToolSet`。
+
+当前入口是环境变量：
+
+```text
+LATTICE_MCP_CONFIG=/path/to/mcp.json
+```
+
+配置文件格式直接复用 `mcpServers` JSON，至少支持 `stdio`：
+
+```json
+{
+  "mcpServers": {
+    "fixture": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["./path/to/server.py"]
+    }
+  }
+}
+```
+
+`real-agent` 示例：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
+
+cargo run -p real-agent -- "Use the MCP tools to inspect available resources"
+```
+
+`lattice-server` 示例：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
+
+cargo run -p lattice-server
+```
+
+行为说明：
+
+- 如果未设置 `LATTICE_MCP_CONFIG`，系统按无 MCP 配置启动
+- 如果某个 MCP server 连接失败，其余 server 仍继续工作
+- `GET /health` 会返回 `mcp_servers` 快照，包含 `state / transport / tool_count / resource_count`
+
 ## LLM Provider 支持
 
 | Provider         | 包                      | 状态 |
