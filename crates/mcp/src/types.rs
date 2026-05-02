@@ -37,6 +37,8 @@ pub struct McpStdioServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpHttpServerConfig {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token: Option<String>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
 }
@@ -44,6 +46,8 @@ pub struct McpHttpServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpWebSocketServerConfig {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token: Option<String>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
 }
@@ -207,6 +211,7 @@ mod tests {
         assert_eq!(
             McpServerConfig::Http(McpHttpServerConfig {
                 url: "https://example.com".into(),
+                bearer_token: None,
                 headers: HashMap::new(),
             })
             .transport(),
@@ -215,6 +220,7 @@ mod tests {
         assert_eq!(
             McpServerConfig::Ws(McpWebSocketServerConfig {
                 url: "wss://example.com".into(),
+                bearer_token: None,
                 headers: HashMap::new(),
             })
             .transport(),

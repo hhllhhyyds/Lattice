@@ -1,25 +1,52 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, sync::Arc};
 
+use futures_util::{SinkExt, StreamExt};
+use http::{HeaderName, HeaderValue};
+use lattice_core::ToolError;
 use rmcp::{
     model::{CallToolRequestParams, ErrorCode, ReadResourceRequestParams, ResourceContents, Tool},
-    service::{RoleClient, RunningService, ServiceError},
-    transport::TokioChildProcess,
+    service::{RoleClient, RunningService, RxJsonRpcMessage, ServiceError, TxJsonRpcMessage},
+    transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+        TokioChildProcess, Transport,
+    },
     ServiceExt,
 };
 use serde_json::Value;
+use tokio::net::TcpStream;
 use tokio::process::Command;
+use tokio::sync::Mutex;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{self, client::IntoClientRequest, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 use tracing::warn;
 
 use crate::types::{
-    McpConnectionSnapshot, McpConnectionStatus, McpResourceInfo, McpServerConfig,
-    McpStdioServerConfig, McpToolInfo,
+    McpConnectionSnapshot, McpConnectionStatus, McpHttpServerConfig, McpResourceInfo,
+    McpServerConfig, McpStdioServerConfig, McpToolInfo, McpWebSocketServerConfig,
 };
-use lattice_core::ToolError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpToolCallOutput {
     pub output: String,
     pub structured_content: Option<Value>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum WebSocketTransportError {
+    #[error("websocket error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+    #[error("json serialization error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+struct WsClientTransport {
+    sink: Arc<
+        Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    >,
+    stream: futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
 pub struct McpClientManager {
@@ -172,19 +199,8 @@ impl McpClientManager {
 
         match config {
             McpServerConfig::Stdio(stdio) => self.connect_stdio(name, stdio).await,
-            unsupported => {
-                self.statuses.insert(
-                    name.to_string(),
-                    McpConnectionStatus::failed(
-                        name.to_string(),
-                        unsupported.transport(),
-                        format!(
-                            "unsupported MCP transport in current build: {}",
-                            unsupported.transport()
-                        ),
-                    ),
-                );
-            }
+            McpServerConfig::Http(http) => self.connect_http(name, http).await,
+            McpServerConfig::Ws(ws) => self.connect_ws(name, ws).await,
         }
     }
 
@@ -201,10 +217,7 @@ impl McpClientManager {
         let transport = match TokioChildProcess::new(command) {
             Ok(transport) => transport,
             Err(err) => {
-                self.statuses.insert(
-                    name.to_string(),
-                    McpConnectionStatus::failed(name.to_string(), "stdio", err.to_string()),
-                );
+                self.record_failed_status(name, "stdio", err.to_string());
                 return;
             }
         };
@@ -212,21 +225,87 @@ impl McpClientManager {
         let client = match ().serve(transport).await {
             Ok(client) => client,
             Err(err) => {
-                self.statuses.insert(
-                    name.to_string(),
-                    McpConnectionStatus::failed(name.to_string(), "stdio", err.to_string()),
-                );
+                self.record_failed_status(name, "stdio", err.to_string());
                 return;
             }
         };
 
+        self.store_connected_client(name, "stdio", client).await;
+    }
+
+    async fn connect_http(&mut self, name: &str, config: McpHttpServerConfig) {
+        let headers = match parse_custom_headers(&config.headers, config.bearer_token.as_deref()) {
+            Ok(headers) => headers,
+            Err(err) => {
+                self.record_failed_status(name, "http", err);
+                return;
+            }
+        };
+
+        let mut transport_config = StreamableHttpClientTransportConfig::with_uri(config.url);
+        if let Some(token) = config.bearer_token {
+            transport_config = transport_config.auth_header(token);
+        }
+        transport_config = transport_config.custom_headers(headers);
+
+        let transport = StreamableHttpClientTransport::from_config(transport_config);
+        let client = match ().serve(transport).await {
+            Ok(client) => client,
+            Err(err) => {
+                self.record_failed_status(name, "http", err.to_string());
+                return;
+            }
+        };
+
+        self.store_connected_client(name, "http", client).await;
+    }
+
+    async fn connect_ws(&mut self, name: &str, config: McpWebSocketServerConfig) {
+        let headers = match parse_custom_headers(&config.headers, config.bearer_token.as_deref()) {
+            Ok(headers) => headers,
+            Err(err) => {
+                self.record_failed_status(name, "ws", err);
+                return;
+            }
+        };
+
+        let request = match build_websocket_request(&config.url, headers, config.bearer_token) {
+            Ok(request) => request,
+            Err(err) => {
+                self.record_failed_status(name, "ws", err);
+                return;
+            }
+        };
+
+        let stream = match connect_async(request).await {
+            Ok((stream, _)) => stream,
+            Err(err) => {
+                self.record_failed_status(name, "ws", err.to_string());
+                return;
+            }
+        };
+
+        let client = match connect_ws_client(stream).await {
+            Ok(client) => client,
+            Err(err) => {
+                self.record_failed_status(name, "ws", err.to_string());
+                return;
+            }
+        };
+
+        self.store_connected_client(name, "ws", client).await;
+    }
+
+    async fn store_connected_client(
+        &mut self,
+        name: &str,
+        transport: &str,
+        client: RunningService<RoleClient, ()>,
+    ) {
         let tools = match client.list_all_tools().await {
             Ok(tools) => tools,
             Err(err) => {
-                self.statuses.insert(
-                    name.to_string(),
-                    McpConnectionStatus::failed(name.to_string(), "stdio", err.to_string()),
-                );
+                self.record_failed_status(name, transport, err.to_string());
                 return;
             }
         };
@@ -235,10 +314,7 @@ impl McpClientManager {
             Ok(resources) => resources,
             Err(err) if is_method_not_found(&err) => Vec::new(),
             Err(err) => {
-                self.statuses.insert(
-                    name.to_string(),
-                    McpConnectionStatus::failed(name.to_string(), "stdio", err.to_string()),
-                );
+                self.record_failed_status(name, transport, err.to_string());
                 return;
             }
         };
@@ -247,7 +323,7 @@ impl McpClientManager {
             name.to_string(),
             McpConnectionStatus::connected(
                 name.to_string(),
-                "stdio",
+                transport,
                 tools
                     .into_iter()
                     .map(|tool| to_tool_info(name, tool))
@@ -264,6 +340,13 @@ impl McpClientManager {
             ),
         );
         self.sessions.insert(name.to_string(), client);
+    }
+
+    fn record_failed_status(&mut self, name: &str, transport: &str, detail: impl Into<String>) {
+        self.statuses.insert(
+            name.to_string(),
+            McpConnectionStatus::failed(name.to_string(), transport, detail),
+        );
     }
 
     fn require_session(
@@ -295,6 +378,120 @@ fn to_tool_info(server_name: &str, tool: Tool) -> McpToolInfo {
 
 fn is_method_not_found(err: &ServiceError) -> bool {
     matches!(err, ServiceError::McpError(error) if error.code == ErrorCode::METHOD_NOT_FOUND)
+}
+
+fn parse_custom_headers(
+    raw_headers: &HashMap<String, String>,
+    bearer_token: Option<&str>,
+) -> Result<HashMap<HeaderName, HeaderValue>, String> {
+    if bearer_token.is_some()
+        && raw_headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
+    {
+        return Err(
+            "authorization header must not be set when bearer_token is configured".to_string(),
+        );
+    }
+
+    let mut headers = HashMap::with_capacity(raw_headers.len());
+    for (name, value) in raw_headers {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| format!("invalid MCP header name '{name}': {err}"))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|err| format!("invalid MCP header value for '{name}': {err}"))?;
+        headers.insert(header_name, header_value);
+    }
+    Ok(headers)
+}
+
+fn build_websocket_request(
+    url: &str,
+    headers: HashMap<HeaderName, HeaderValue>,
+    bearer_token: Option<String>,
+) -> Result<http::Request<()>, String> {
+    let mut request = url
+        .into_client_request()
+        .map_err(|err| format!("invalid websocket request for '{url}': {err}"))?;
+
+    for (name, value) in headers {
+        request.headers_mut().insert(name, value);
+    }
+
+    if let Some(token) = bearer_token {
+        let value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|err| format!("invalid websocket bearer token: {err}"))?;
+        request
+            .headers_mut()
+            .insert(HeaderName::from_static("authorization"), value);
+    }
+
+    Ok(request)
+}
+
+async fn connect_ws_client(
+    stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Result<RunningService<RoleClient, ()>, rmcp::service::ClientInitializeError> {
+    let (sink, stream) = stream.split();
+    let transport = WsClientTransport {
+        sink: Arc::new(Mutex::new(sink)),
+        stream,
+    };
+    ().serve(transport).await
+}
+
+impl Transport<RoleClient> for WsClientTransport {
+    type Error = WebSocketTransportError;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleClient>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let sink = Arc::clone(&self.sink);
+        async move {
+            let payload = serde_json::to_string(&item)?;
+            let mut sink = sink.lock().await;
+            sink.send(Message::Text(payload)).await?;
+            Ok(())
+        }
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
+        while let Some(message) = self.stream.next().await {
+            match message {
+                Ok(Message::Text(text)) => {
+                    match serde_json::from_str::<RxJsonRpcMessage<RoleClient>>(&text) {
+                        Ok(message) => return Some(message),
+                        Err(err) => {
+                            warn!(?err, "dropping invalid websocket MCP text frame");
+                        }
+                    }
+                }
+                Ok(Message::Binary(bytes)) => {
+                    match std::str::from_utf8(&bytes).ok().and_then(|text| {
+                        serde_json::from_str::<RxJsonRpcMessage<RoleClient>>(text).ok()
+                    }) {
+                        Some(message) => return Some(message),
+                        None => warn!("dropping invalid websocket MCP binary frame"),
+                    }
+                }
+                Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
+                Ok(Message::Close(_)) => return None,
+                Err(err) => {
+                    warn!(?err, "websocket MCP stream closed with transport error");
+                    return None;
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        let mut sink = self.sink.lock().await;
+        sink.send(Message::Close(None)).await?;
+        Ok(())
+    }
 }
 
 fn render_tool_result(result: &rmcp::model::CallToolResult) -> String {
