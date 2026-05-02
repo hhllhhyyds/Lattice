@@ -16,6 +16,11 @@ struct HelloArgs {
     name: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct FailArgs {
+    reason: String,
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 struct FixtureServer {
@@ -60,6 +65,17 @@ impl FixtureServer {
     #[tool(description = "Return a fixture greeting")]
     fn hello(&self, Parameters(HelloArgs { name }): Parameters<HelloArgs>) -> String {
         format!("fixture-hello:{name}")
+    }
+
+    #[tool(description = "Return a deterministic fixture error")]
+    fn fail(
+        &self,
+        Parameters(FailArgs { reason }): Parameters<FailArgs>,
+    ) -> Result<String, McpError> {
+        Err(McpError::invalid_params(
+            format!("fixture-fail:{reason}"),
+            None,
+        ))
     }
 }
 
@@ -112,6 +128,17 @@ mod tests {
             name: "lattice".to_string(),
         }));
         assert_eq!(result, "fixture-hello:lattice");
+    }
+
+    #[test]
+    fn fail_tool_returns_fixture_error() {
+        let server = FixtureServer::new();
+        let err = server
+            .fail(Parameters(FailArgs {
+                reason: "boom".to_string(),
+            }))
+            .unwrap_err();
+        assert!(err.message.contains("fixture-fail:boom"));
     }
 
     #[test]

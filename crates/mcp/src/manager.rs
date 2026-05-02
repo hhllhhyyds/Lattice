@@ -1,17 +1,25 @@
 use std::collections::HashMap;
 
 use rmcp::{
-    model::{ErrorCode, Tool},
+    model::{CallToolRequestParams, ErrorCode, Tool},
     service::{RoleClient, RunningService, ServiceError},
     transport::TokioChildProcess,
     ServiceExt,
 };
+use serde_json::Value;
 use tokio::process::Command;
 use tracing::warn;
 
 use crate::types::{
     McpConnectionStatus, McpResourceInfo, McpServerConfig, McpStdioServerConfig, McpToolInfo,
 };
+use lattice_core::ToolError;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpToolCallOutput {
+    pub output: String,
+    pub structured_content: Option<Value>,
+}
 
 pub struct McpClientManager {
     server_configs: HashMap<String, McpServerConfig>,
@@ -60,6 +68,46 @@ impl McpClientManager {
             .into_iter()
             .flat_map(|status| status.resources)
             .collect()
+    }
+
+    pub async fn call_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<McpToolCallOutput, ToolError> {
+        let session = self.sessions.get(server_name).ok_or_else(|| {
+            ToolError::NotFound(format!("MCP server not connected: {server_name}"))
+        })?;
+
+        let request = match arguments {
+            Value::Null => CallToolRequestParams::new(tool_name.to_string()),
+            Value::Object(map) => {
+                CallToolRequestParams::new(tool_name.to_string()).with_arguments(map)
+            }
+            other => {
+                return Err(ToolError::InvalidParams(format!(
+                    "MCP tool arguments must be a JSON object, got {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+
+        let result = session.call_tool(request).await.map_err(|err| {
+            ToolError::ExecutionFailed(format!(
+                "MCP tool call failed on server '{server_name}' for '{tool_name}': {err}"
+            ))
+        })?;
+
+        let output = render_tool_result(&result);
+        if result.is_error == Some(true) {
+            return Err(ToolError::ExecutionFailed(output));
+        }
+
+        Ok(McpToolCallOutput {
+            output,
+            structured_content: result.structured_content,
+        })
     }
 
     pub async fn connect_all(&mut self) {
@@ -213,4 +261,33 @@ fn to_tool_info(server_name: &str, tool: Tool) -> McpToolInfo {
 
 fn is_method_not_found(err: &ServiceError) -> bool {
     matches!(err, ServiceError::McpError(error) if error.code == ErrorCode::METHOD_NOT_FOUND)
+}
+
+fn render_tool_result(result: &rmcp::model::CallToolResult) -> String {
+    let text_parts: Vec<String> = result
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|text| text.text.clone()))
+        .collect();
+
+    if !text_parts.is_empty() {
+        return text_parts.join("\n");
+    }
+
+    if let Some(structured) = &result.structured_content {
+        return serde_json::to_string_pretty(structured).unwrap_or_else(|_| structured.to_string());
+    }
+
+    String::new()
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }

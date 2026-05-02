@@ -889,6 +889,9 @@ dependencies = [
 name = "lattice-mcp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "lattice-core",
+ "lattice-tools",
  "rmcp",
  "serde",
  "serde_json",
