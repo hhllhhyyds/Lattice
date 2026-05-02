@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use lattice_core::ToolExecutor;
 use lattice_mcp::{
-    mcp_tool_name, McpClientManager, McpConnectionState, McpHttpServerConfig, McpServerConfig,
-    McpStdioServerConfig, McpToolAdapter, McpWebSocketServerConfig,
+    mcp_tool_name, ListMcpResourcesTool, McpClientManager, McpConnectionState, McpHttpServerConfig,
+    McpServerConfig, McpStdioServerConfig, McpToolAdapter, McpWebSocketServerConfig,
+    ReadMcpResourceTool,
 };
 use lattice_tools::ToolSet;
 use rmcp::{
@@ -398,6 +399,87 @@ async fn manager_can_call_mcp_tool() {
 }
 
 #[tokio::test]
+async fn manager_can_read_mcp_resource() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let output = manager
+        .read_resource("fixture", "fixture://readme")
+        .await
+        .unwrap();
+    assert_eq!(output, "fixture resource contents");
+}
+
+#[tokio::test]
+async fn manager_reports_missing_mcp_resource() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let err = manager
+        .read_resource("fixture", "fixture://missing")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, lattice_core::ToolError::NotFound(_)));
+    assert!(err.to_string().contains("fixture://missing"));
+}
+
+#[tokio::test]
+async fn manager_connection_snapshots_include_counts() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+    configs.insert(
+        "http-remote".to_string(),
+        McpServerConfig::Http(McpHttpServerConfig {
+            url: "https://example.com/mcp".to_string(),
+            headers: HashMap::new(),
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let snapshots = manager.list_status_snapshots();
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots[0].name, "fixture");
+    assert_eq!(snapshots[0].tool_count, 2);
+    assert_eq!(snapshots[0].resource_count, 1);
+    assert_eq!(snapshots[1].name, "http-remote");
+    assert_eq!(snapshots[1].tool_count, 0);
+    assert_eq!(snapshots[1].resource_count, 0);
+    assert_eq!(snapshots[1].state, McpConnectionState::Failed);
+}
+
+#[tokio::test]
 async fn manager_rejects_non_object_tool_arguments() {
     let mut configs = HashMap::new();
     configs.insert(
@@ -478,4 +560,91 @@ async fn mcp_tool_adapter_registers_into_toolset_and_executes() {
         .await
         .unwrap();
     assert_eq!(result.stdout, "fixture-hello:bridge");
+}
+
+#[tokio::test]
+async fn mcp_resource_tools_register_into_toolset_and_execute() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+    let manager = Arc::new(manager);
+
+    let mut set = ToolSet::new();
+    set.register(ListMcpResourcesTool::new(manager.clone()))
+        .unwrap();
+    set.register(ReadMcpResourceTool::new(manager.clone()))
+        .unwrap();
+
+    let listed = set
+        .execute("list_mcp_resources", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert!(listed.stdout.contains("fixture fixture://readme"));
+
+    let read = set
+        .execute(
+            "read_mcp_resource",
+            serde_json::json!({
+                "server": "fixture",
+                "uri": "fixture://readme"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.stdout, "fixture resource contents");
+}
+
+#[tokio::test]
+async fn list_mcp_resources_handles_empty_servers() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_tools_only_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+    let tool = ListMcpResourcesTool::new(Arc::new(manager));
+
+    let result = tool.execute(serde_json::json!({})).await.unwrap();
+    assert_eq!(result.stdout, "(no MCP resources)");
+}
+
+#[tokio::test]
+async fn list_mcp_resources_rejects_non_object_params() {
+    let manager = Arc::new(McpClientManager::new(HashMap::new()));
+    let tool = ListMcpResourcesTool::new(manager);
+
+    let err = tool.execute(serde_json::json!(["bad"])).await.unwrap_err();
+    assert!(matches!(err, lattice_core::ToolError::InvalidParams(_)));
+}
+
+#[tokio::test]
+async fn read_mcp_resource_rejects_invalid_params() {
+    let manager = Arc::new(McpClientManager::new(HashMap::new()));
+    let tool = ReadMcpResourceTool::new(manager);
+
+    let err = tool
+        .execute(serde_json::json!({ "server": 1, "uri": true }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, lattice_core::ToolError::InvalidParams(_)));
+    assert!(err
+        .to_string()
+        .contains("invalid read_mcp_resource arguments"));
 }

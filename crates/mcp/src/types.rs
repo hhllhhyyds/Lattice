@@ -88,6 +88,16 @@ pub struct McpConnectionStatus {
     pub resources: Vec<McpResourceInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpConnectionSnapshot {
+    pub name: String,
+    pub state: McpConnectionState,
+    pub detail: String,
+    pub transport: String,
+    pub tool_count: usize,
+    pub resource_count: usize,
+}
+
 impl McpConnectionStatus {
     #[must_use]
     pub fn pending(name: impl Into<String>, transport: impl Into<String>) -> Self {
@@ -131,6 +141,18 @@ impl McpConnectionStatus {
             transport: transport.into(),
             tools: Vec::new(),
             resources: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> McpConnectionSnapshot {
+        McpConnectionSnapshot {
+            name: self.name.clone(),
+            state: self.state.clone(),
+            detail: self.detail.clone(),
+            transport: self.transport.clone(),
+            tool_count: self.tools.len(),
+            resource_count: self.resources.len(),
         }
     }
 }
@@ -243,5 +265,32 @@ mod tests {
         assert_eq!(failed.transport, "stdio");
         assert!(failed.tools.is_empty());
         assert!(failed.resources.is_empty());
+    }
+
+    #[test]
+    fn connection_status_snapshot_reports_counts() {
+        let status = McpConnectionStatus::connected(
+            "fixture",
+            "stdio",
+            vec![McpToolInfo {
+                server_name: "fixture".into(),
+                name: "hello".into(),
+                description: String::new(),
+                input_schema: Map::new(),
+            }],
+            vec![McpResourceInfo {
+                server_name: "fixture".into(),
+                name: "Fixture Readme".into(),
+                uri: "fixture://readme".into(),
+                description: String::new(),
+            }],
+        );
+
+        let snapshot = status.snapshot();
+        assert_eq!(snapshot.name, "fixture");
+        assert_eq!(snapshot.state, McpConnectionState::Connected);
+        assert_eq!(snapshot.transport, "stdio");
+        assert_eq!(snapshot.tool_count, 1);
+        assert_eq!(snapshot.resource_count, 1);
     }
 }
