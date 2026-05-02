@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::Utc;
 use lattice_core::{Actor, EventFilter, EventId, SessionId};
+use lattice_mcp::McpConnectionState;
 use serde::Deserialize;
 
 use crate::api::types::*;
@@ -53,6 +54,7 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/sessions", post(create_session).get(list_sessions))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
+        .route("/mcp", get(get_mcp_status))
         .route("/sessions/{id}/events", get(get_events))
         .route("/sessions/{id}/stream", get(session_stream))
         .route(
@@ -61,6 +63,63 @@ pub fn v1_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/run", post(trigger_run))
         .route("/sessions/{id}/status", get(get_status))
+}
+
+/// GET /v1/mcp - returns MCP connection status and discovered capabilities.
+async fn get_mcp_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<McpStatusResponse>, AppError> {
+    let statuses = state
+        .mcp_manager
+        .as_ref()
+        .map(|manager| manager.list_statuses())
+        .unwrap_or_default();
+
+    let connected_count = statuses
+        .iter()
+        .filter(|status| status.state == McpConnectionState::Connected)
+        .count();
+    let failed_count = statuses
+        .iter()
+        .filter(|status| status.state == McpConnectionState::Failed)
+        .count();
+
+    Ok(Json(McpStatusResponse {
+        enabled: state.mcp_manager.is_some(),
+        server_count: statuses.len(),
+        connected_count,
+        failed_count,
+        servers: statuses
+            .into_iter()
+            .map(|status| McpServerStatusResponse {
+                name: status.name,
+                state: status.state,
+                transport: status.transport,
+                detail: status.detail,
+                tool_count: status.tools.len(),
+                resource_count: status.resources.len(),
+                tools: status
+                    .tools
+                    .into_iter()
+                    .map(|tool| McpToolSummary {
+                        server_name: tool.server_name,
+                        name: tool.name,
+                        description: tool.description,
+                    })
+                    .collect(),
+                resources: status
+                    .resources
+                    .into_iter()
+                    .map(|resource| McpResourceSummary {
+                        server_name: resource.server_name,
+                        name: resource.name,
+                        uri: resource.uri,
+                        description: resource.description,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }))
 }
 
 /// DELETE /v1/sessions/:id — deletes a session and all of its events.

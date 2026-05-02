@@ -29,7 +29,12 @@
         <div class="panel stack-sm">
           <div class="panel-title-row">
             <h2>会话列表</h2>
-            <button id="refresh-sessions-btn" class="ghost-button icon-button" type="button" title="刷新会话列表">
+            <button
+              id="refresh-sessions-btn"
+              class="ghost-button icon-button"
+              type="button"
+              title="刷新会话列表"
+            >
               ↻
             </button>
           </div>
@@ -93,7 +98,12 @@
           <div class="panel stack-sm">
             <div class="panel-title-row">
               <h2>运行状态</h2>
-              <button id="refresh-detail-btn" class="ghost-button icon-button" type="button" title="刷新当前会话">
+              <button
+                id="refresh-detail-btn"
+                class="ghost-button icon-button"
+                type="button"
+                title="刷新当前会话"
+              >
                 ↻
               </button>
             </div>
@@ -104,6 +114,32 @@
               <div><dt>事件数</dt><dd>-</dd></div>
               <div><dt>最新事件</dt><dd>-</dd></div>
             </dl>
+          </div>
+
+          <div id="mcp-panel" class="panel panel-fill stack-sm">
+            <div class="panel-title-row">
+              <h2>MCP</h2>
+              <div class="panel-actions">
+                <span id="mcp-count-badge" class="meta-pill">0</span>
+                <button
+                  id="refresh-mcp-btn"
+                  class="ghost-button icon-button"
+                  type="button"
+                  title="刷新 MCP 状态"
+                >
+                  ↻
+                </button>
+              </div>
+            </div>
+            <dl id="mcp-summary" class="status-summary">
+              <div><dt>启用</dt><dd>false</dd></div>
+              <div><dt>已连接</dt><dd>0</dd></div>
+              <div><dt>失败</dt><dd>0</dd></div>
+              <div><dt>总数</dt><dd>0</dd></div>
+            </dl>
+            <div id="mcp-list" class="mcp-list empty-state">
+              当前未配置 MCP server。
+            </div>
           </div>
 
           <div class="panel panel-fill stack-sm">
