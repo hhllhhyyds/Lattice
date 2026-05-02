@@ -212,7 +212,13 @@ http://127.0.0.1:3001
 LATTICE_MCP_CONFIG=/path/to/mcp.json
 ```
 
-配置文件格式直接复用 `mcpServers` JSON，至少支持 `stdio`：
+配置文件格式直接复用 `mcpServers` JSON。当前支持：
+
+- `stdio`
+- `http`
+- `ws`
+
+`stdio` 示例：
 
 ```json
 {
@@ -225,6 +231,37 @@ LATTICE_MCP_CONFIG=/path/to/mcp.json
   }
 }
 ```
+
+远端 MCP 示例，支持 `bearer_token` 和自定义 headers：
+
+```json
+{
+  "mcpServers": {
+    "remote-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "bearer_token": "your_token",
+      "headers": {
+        "x-client-id": "lattice"
+      }
+    },
+    "remote-ws": {
+      "type": "ws",
+      "url": "wss://mcp.example.com/mcp",
+      "bearer_token": "your_token",
+      "headers": {
+        "x-client-id": "lattice"
+      }
+    }
+  }
+}
+```
+
+配置约束：
+
+- `bearer_token` 会自动写入 `Authorization: Bearer ...`
+- 如果已经配置 `bearer_token`，就不要再在 `headers` 里手动填写 `Authorization`
+- 远端 `http/ws` 连接失败时只影响对应 server，不会阻塞其他 MCP server 启动
 
 `real-agent` 示例：
 

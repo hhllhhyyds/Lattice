@@ -628,6 +628,7 @@ mod tests {
             "http-remote".to_string(),
             lattice_mcp::McpServerConfig::Http(lattice_mcp::McpHttpServerConfig {
                 url: "https://example.com/mcp".to_string(),
+                bearer_token: None,
                 headers: std::collections::HashMap::new(),
             }),
         );
