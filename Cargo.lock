@@ -945,6 +945,7 @@ dependencies = [
  "lattice-llm-anthropic",
  "lattice-llm-openai",
  "lattice-llm-protocol",
+ "lattice-mcp",
  "lattice-runtime",
  "lattice-sandbox-local",
  "lattice-store-memory",
@@ -1276,6 +1277,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lattice",
+ "lattice-mcp",
  "serde_json",
  "tokio",
  "tracing",

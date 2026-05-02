@@ -1,18 +1,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lattice_core::ToolExecutor;
 use lattice_mcp::{
-    mcp_tool_name, ListMcpResourcesTool, McpClientManager, McpConnectionState, McpHttpServerConfig,
-    McpServerConfig, McpStdioServerConfig, McpToolAdapter, McpWebSocketServerConfig,
-    ReadMcpResourceTool,
+    load_mcp_manager_from_env, load_mcp_server_configs_from_path, mcp_tool_name,
+    register_mcp_tools, ListMcpResourcesTool, McpClientManager, McpConnectionState,
+    McpHttpServerConfig, McpServerConfig, McpStdioServerConfig, McpToolAdapter,
+    McpWebSocketServerConfig, ReadMcpResourceTool, LATTICE_MCP_CONFIG_ENV,
 };
 use lattice_tools::ToolSet;
 use rmcp::{
     model::ReadResourceRequestParams, service::RoleClient, transport::TokioChildProcess, ServiceExt,
 };
 use tokio::process::Command;
+
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn fixture_binary(name: &str) -> String {
     let key = format!("CARGO_BIN_EXE_{name}");
@@ -37,6 +41,25 @@ async fn connect_fixture_client(
     ().serve(transport)
         .await
         .expect("fixture client should connect")
+}
+
+fn write_temp_mcp_config(command: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("lattice-mcp-{unique}.json"));
+    let json = serde_json::json!({
+        "mcpServers": {
+            "fixture": {
+                "type": "stdio",
+                "command": command,
+                "args": []
+            }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    path
 }
 
 #[tokio::test]
@@ -396,6 +419,46 @@ async fn manager_can_call_mcp_tool() {
         .unwrap();
     assert_eq!(output.output, "fixture-hello:lattice");
     assert_eq!(output.structured_content, None);
+}
+
+#[test]
+fn load_mcp_server_configs_from_path_parses_json_file() {
+    let path = write_temp_mcp_config("fixture-command");
+    let configs = load_mcp_server_configs_from_path(&path).unwrap();
+    std::fs::remove_file(path).ok();
+
+    let Some(McpServerConfig::Stdio(config)) = configs.get("fixture") else {
+        panic!("expected stdio fixture config");
+    };
+    assert_eq!(config.command, "fixture-command");
+}
+
+#[tokio::test]
+async fn load_mcp_manager_from_env_and_register_mcp_tools() {
+    let _guard = ENV_LOCK.lock().await;
+    let path = write_temp_mcp_config(&fixture_binary("fixture_mcp_server"));
+    unsafe {
+        std::env::set_var(LATTICE_MCP_CONFIG_ENV, &path);
+    }
+
+    let manager = load_mcp_manager_from_env()
+        .await
+        .unwrap()
+        .expect("manager should load from env config");
+    let snapshots = manager.list_status_snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].state, McpConnectionState::Connected);
+
+    let mut toolset = ToolSet::new();
+    register_mcp_tools(&mut toolset, manager).unwrap();
+    assert!(toolset.contains("list_mcp_resources"));
+    assert!(toolset.contains("read_mcp_resource"));
+    assert!(toolset.contains(&mcp_tool_name("fixture", "hello")));
+
+    unsafe {
+        std::env::remove_var(LATTICE_MCP_CONFIG_ENV);
+    }
+    std::fs::remove_file(path).ok();
 }
 
 #[tokio::test]
