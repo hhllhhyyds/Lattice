@@ -53,6 +53,7 @@ lattice-llm-openai = { path = "crates/llm-openai", optional = true }
 resolver = "2"
 members = [
     "crates/core",
+    "crates/mcp",
     "crates/runtime",
     "crates/store-memory",
     "crates/sandbox-local",
@@ -91,3 +92,4 @@ hyper = "1"
 http-body-util = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
 dotenvy = "0.15"
+rmcp = { version = "1.5.0", default-features = false, features = ["client", "server", "macros", "transport-child-process", "transport-io"] }
