@@ -78,6 +78,7 @@ async fn new_manager_starts_all_servers_pending() {
         "remote".to_string(),
         McpServerConfig::Http(McpHttpServerConfig {
             url: "https://example.com/mcp".to_string(),
+            bearer_token: None,
             headers: HashMap::new(),
         }),
     );
@@ -287,12 +288,13 @@ async fn reconnect_all_recovers_failed_stdio_session() {
 }
 
 #[tokio::test]
-async fn connect_all_marks_unsupported_http_and_ws_transports_failed() {
+async fn connect_all_marks_unreachable_http_and_ws_transports_failed() {
     let mut configs = HashMap::new();
     configs.insert(
         "http-remote".to_string(),
         McpServerConfig::Http(McpHttpServerConfig {
             url: "https://example.com/mcp".to_string(),
+            bearer_token: None,
             headers: HashMap::new(),
         }),
     );
@@ -300,6 +302,7 @@ async fn connect_all_marks_unsupported_http_and_ws_transports_failed() {
         "ws-remote".to_string(),
         McpServerConfig::Ws(McpWebSocketServerConfig {
             url: "wss://example.com/mcp".to_string(),
+            bearer_token: None,
             headers: HashMap::new(),
         }),
     );
@@ -312,14 +315,14 @@ async fn connect_all_marks_unsupported_http_and_ws_transports_failed() {
     assert_eq!(statuses[0].name, "http-remote");
     assert_eq!(statuses[0].state, McpConnectionState::Failed);
     assert_eq!(statuses[0].transport, "http");
-    assert!(statuses[0].detail.contains("unsupported MCP transport"));
+    assert!(!statuses[0].detail.is_empty());
     assert!(statuses[0].tools.is_empty());
     assert!(statuses[0].resources.is_empty());
 
     assert_eq!(statuses[1].name, "ws-remote");
     assert_eq!(statuses[1].state, McpConnectionState::Failed);
     assert_eq!(statuses[1].transport, "ws");
-    assert!(statuses[1].detail.contains("unsupported MCP transport"));
+    assert!(!statuses[1].detail.is_empty());
     assert!(statuses[1].tools.is_empty());
     assert!(statuses[1].resources.is_empty());
 }
@@ -340,6 +343,7 @@ async fn list_statuses_tools_and_resources_are_sorted_and_aggregated() {
         "a-http".to_string(),
         McpServerConfig::Http(McpHttpServerConfig {
             url: "https://example.com/mcp".to_string(),
+            bearer_token: None,
             headers: HashMap::new(),
         }),
     );
@@ -524,6 +528,7 @@ async fn manager_connection_snapshots_include_counts() {
         "http-remote".to_string(),
         McpServerConfig::Http(McpHttpServerConfig {
             url: "https://example.com/mcp".to_string(),
+            bearer_token: None,
             headers: HashMap::new(),
         }),
     );
