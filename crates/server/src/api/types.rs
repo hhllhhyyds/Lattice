@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use lattice_core::{Actor, Event, EventId, SessionId};
+use lattice_mcp::McpConnectionState;
 use serde::{Deserialize, Serialize};
 
 /// Optional metadata when creating a session.
@@ -231,4 +232,68 @@ pub struct LatestEventInfo {
     pub payload_type: String,
     /// When the event occurred.
     pub timestamp: DateTime<Utc>,
+}
+
+/// Response for GET /v1/mcp.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatusResponse {
+    /// Whether MCP is configured for this server process.
+    pub enabled: bool,
+    /// Total number of configured MCP servers.
+    pub server_count: usize,
+    /// Number of connected MCP servers.
+    pub connected_count: usize,
+    /// Number of failed MCP servers.
+    pub failed_count: usize,
+    /// Detailed status for each MCP server.
+    pub servers: Vec<McpServerStatusResponse>,
+}
+
+/// Detailed status for a single MCP server.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatusResponse {
+    /// Server name from MCP config.
+    pub name: String,
+    /// Connection state.
+    pub state: McpConnectionState,
+    /// Transport name (e.g. stdio/http/ws).
+    pub transport: String,
+    /// Error or status detail, if any.
+    pub detail: String,
+    /// Number of discovered tools.
+    pub tool_count: usize,
+    /// Number of discovered resources.
+    pub resource_count: usize,
+    /// Tool summaries.
+    pub tools: Vec<McpToolSummary>,
+    /// Resource summaries.
+    pub resources: Vec<McpResourceSummary>,
+}
+
+/// Tool summary for MCP status responses.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolSummary {
+    /// Parent MCP server name.
+    pub server_name: String,
+    /// Tool name.
+    pub name: String,
+    /// Optional human-readable description.
+    pub description: String,
+}
+
+/// Resource summary for MCP status responses.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceSummary {
+    /// Parent MCP server name.
+    pub server_name: String,
+    /// Resource display name.
+    pub name: String,
+    /// Resource URI.
+    pub uri: String,
+    /// Optional human-readable description.
+    pub description: String,
 }

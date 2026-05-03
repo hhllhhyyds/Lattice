@@ -6,17 +6,22 @@ const state = {
   currentMessages: [],
   currentEvents: [],
   currentStatus: null,
+  currentMcpStatus: null,
 };
 
 const el = {
   createSessionBtn: document.getElementById("create-session-btn"),
   refreshSessionsBtn: document.getElementById("refresh-sessions-btn"),
   refreshDetailBtn: document.getElementById("refresh-detail-btn"),
+  refreshMcpBtn: document.getElementById("refresh-mcp-btn"),
   sessionName: document.getElementById("session-name"),
   sessionList: document.getElementById("session-list"),
   activeSessionLabel: document.getElementById("active-session-label"),
   statusChip: document.getElementById("status-chip"),
   statusSummary: document.getElementById("status-summary"),
+  mcpSummary: document.getElementById("mcp-summary"),
+  mcpList: document.getElementById("mcp-list"),
+  mcpCountBadge: document.getElementById("mcp-count-badge"),
   messageList: document.getElementById("message-list"),
   eventList: document.getElementById("event-list"),
   eventCountBadge: document.getElementById("event-count-badge"),
@@ -98,10 +103,10 @@ function renderSessions(sessions) {
     const label = sessionTitle(session);
     button.innerHTML = `
       <div class="session-card-header">
-        <p class="session-title">${label.title}</p>
+        <p class="session-title">${escapeHtml(label.title)}</p>
         <span class="session-delete" data-session-id="${session.sessionId}" title="删除会话" aria-label="删除会话">×</span>
       </div>
-      <p class="session-meta">${label.meta}</p>
+      <p class="session-meta">${escapeHtml(label.meta)}</p>
     `;
     button.addEventListener("click", () => selectSession(session.sessionId));
     button.querySelector(".session-delete").addEventListener("click", (event) => {
@@ -147,7 +152,7 @@ function renderMessages(messages) {
     const item = document.createElement("article");
     item.className = `message-item ${message.role}`;
     item.innerHTML = `
-      <p class="message-meta">${message.role} · ${formatTime(message.timestamp)}</p>
+      <p class="message-meta">${escapeHtml(message.role)} · ${formatTime(message.timestamp)}</p>
       <pre class="message-content">${escapeHtml(message.content)}</pre>
     `;
     el.messageList.appendChild(item);
@@ -173,7 +178,7 @@ function renderEvents(events) {
       item.className = "event-item";
       item.innerHTML = `
         <header>
-          <p class="event-title">${event.payload.type} · ${event.actor}</p>
+          <p class="event-title">${escapeHtml(event.payload.type)} · ${escapeHtml(event.actor)}</p>
           <span class="event-time">${formatTime(event.timestamp)}</span>
         </header>
         <pre class="event-body">${escapeHtml(summarizePayload(event.payload))}</pre>
@@ -188,16 +193,85 @@ function renderStatus(status) {
     ? `${status.latestEvent.payloadType} · ${status.latestEvent.actor}`
     : "-";
   el.statusSummary.innerHTML = `
-    <div><dt>会话</dt><dd>${state.selectedSessionId || "-"}</dd></div>
-    <div><dt>开始时间</dt><dd>${formatTime(status?.runStartedAt)}</dd></div>
-    <div><dt>结束时间</dt><dd>${formatTime(status?.runCompletedAt)}</dd></div>
+    <div><dt>会话</dt><dd>${escapeHtml(state.selectedSessionId || "-")}</dd></div>
+    <div><dt>开始时间</dt><dd>${escapeHtml(formatTime(status?.runStartedAt))}</dd></div>
+    <div><dt>结束时间</dt><dd>${escapeHtml(formatTime(status?.runCompletedAt))}</dd></div>
     <div><dt>事件数</dt><dd>${status?.eventCount ?? 0}</dd></div>
-    <div><dt>最新事件</dt><dd>${latest}</dd></div>
+    <div><dt>最新事件</dt><dd>${escapeHtml(latest)}</dd></div>
   `;
 }
 
+function renderMcpStatus(mcpStatus) {
+  const enabled = Boolean(mcpStatus?.enabled);
+  const connectedCount = mcpStatus?.connectedCount ?? 0;
+  const failedCount = mcpStatus?.failedCount ?? 0;
+  const serverCount = mcpStatus?.serverCount ?? 0;
+  const servers = mcpStatus?.servers || [];
+
+  el.mcpCountBadge.textContent = String(serverCount);
+  el.mcpSummary.innerHTML = `
+    <div><dt>启用</dt><dd>${enabled ? "true" : "false"}</dd></div>
+    <div><dt>已连接</dt><dd>${connectedCount}</dd></div>
+    <div><dt>失败</dt><dd>${failedCount}</dd></div>
+    <div><dt>总数</dt><dd>${serverCount}</dd></div>
+  `;
+
+  if (!enabled) {
+    el.mcpList.className = "mcp-list empty-state";
+    el.mcpList.textContent = "当前未配置 MCP server。";
+    return;
+  }
+
+  if (!servers.length) {
+    el.mcpList.className = "mcp-list empty-state";
+    el.mcpList.textContent = "MCP 已启用，但当前没有可用 server。";
+    return;
+  }
+
+  el.mcpList.className = "mcp-list";
+  el.mcpList.innerHTML = "";
+
+  servers.forEach((server) => {
+    const item = document.createElement("article");
+    item.className = "mcp-server-card";
+    const detail = server.detail?.trim() || "OK";
+    const tools = server.tools?.length
+      ? server.tools.map((tool) => tool.name).join(", ")
+      : "无";
+    const resources = server.resources?.length
+      ? server.resources.map((resource) => resource.uri).join(", ")
+      : "无";
+    item.innerHTML = `
+      <header class="mcp-server-header">
+        <div>
+          <p class="mcp-server-name">${escapeHtml(server.name)}</p>
+          <p class="mcp-server-meta">${escapeHtml(server.transport)} · ${escapeHtml(server.state)}</p>
+        </div>
+        <span class="status-chip ${escapeHtml(server.state)}">${escapeHtml(server.state)}</span>
+      </header>
+      <dl class="mcp-server-summary">
+        <div><dt>Tools</dt><dd>${server.toolCount}</dd></div>
+        <div><dt>Resources</dt><dd>${server.resourceCount}</dd></div>
+      </dl>
+      <p class="mcp-server-detail">${escapeHtml(detail)}</p>
+      <details class="mcp-server-details">
+        <summary>能力清单</summary>
+        <div class="mcp-detail-section">
+          <p class="mcp-detail-label">Tools</p>
+          <pre class="event-body">${escapeHtml(tools)}</pre>
+        </div>
+        <div class="mcp-detail-section">
+          <p class="mcp-detail-label">Resources</p>
+          <pre class="event-body">${escapeHtml(resources)}</pre>
+        </div>
+      </details>
+    `;
+    el.mcpList.appendChild(item);
+  });
+}
+
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
@@ -380,6 +454,12 @@ async function loadCurrentSession() {
   await openSessionStream();
 }
 
+async function loadMcpStatus() {
+  const status = await api("/v1/mcp");
+  state.currentMcpStatus = status;
+  renderMcpStatus(status);
+}
+
 async function selectSession(sessionId) {
   if (sessionId === state.selectedSessionId && state.stream) {
     return;
@@ -493,9 +573,10 @@ async function sendMessage(event) {
 el.createSessionBtn.addEventListener("click", createSession);
 el.refreshSessionsBtn.addEventListener("click", () => loadSessions().catch((error) => showToast(error.message, true)));
 el.refreshDetailBtn.addEventListener("click", () => loadCurrentSession().catch((error) => showToast(error.message, true)));
+el.refreshMcpBtn.addEventListener("click", () => loadMcpStatus().catch((error) => showToast(error.message, true)));
 el.messageForm.addEventListener("submit", sendMessage);
 
-loadSessions(true)
+Promise.all([loadSessions(true), loadMcpStatus()])
   .then(() => loadCurrentSession())
   .catch((error) => showToast(error.message, true));
 

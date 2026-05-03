@@ -445,6 +445,7 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Lattice Console"));
         assert!(html.contains("/ui/app.js"));
+        assert!(html.contains("mcp-panel"));
     }
 
     #[tokio::test]
@@ -498,6 +499,7 @@ mod tests {
         assert!(js.contains("loadSessions"));
         assert!(js.contains("sendMessage"));
         assert!(js.contains("deleteSession"));
+        assert!(js.contains("loadMcpStatus"));
     }
 
     #[tokio::test]
@@ -662,6 +664,85 @@ mod tests {
         assert_eq!(json["mcp_servers"][0]["state"], "failed");
         assert_eq!(json["mcp_servers"][0]["tool_count"], 0);
         assert_eq!(json["mcp_servers"][0]["resource_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn mcp_status_route_reports_disabled_when_unconfigured() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["enabled"], false);
+        assert_eq!(json["serverCount"], 0);
+        assert_eq!(json["connectedCount"], 0);
+        assert_eq!(json["failedCount"], 0);
+        assert!(json["servers"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_status_route_reports_server_details() {
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "http-remote".to_string(),
+            lattice_mcp::McpServerConfig::Http(lattice_mcp::McpHttpServerConfig {
+                url: "https://example.com/mcp".to_string(),
+                headers: std::collections::HashMap::new(),
+            }),
+        );
+        let mut manager = lattice_mcp::McpClientManager::new(configs);
+        manager.connect_all().await;
+
+        let state = new_state_with_mcp_components(
+            Arc::new(lattice_store_memory::MemoryStore::new()),
+            Arc::new(TestFactory),
+            Arc::new(ToolSet::new()),
+            Some(Arc::new(manager)),
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["enabled"], true);
+        assert_eq!(json["serverCount"], 1);
+        assert_eq!(json["connectedCount"], 0);
+        assert_eq!(json["failedCount"], 1);
+        assert_eq!(json["servers"][0]["name"], "http-remote");
+        assert_eq!(json["servers"][0]["transport"], "http");
+        assert_eq!(json["servers"][0]["state"], "failed");
+        assert!(json["servers"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported"));
+        assert!(json["servers"][0]["tools"].as_array().unwrap().is_empty());
+        assert!(json["servers"][0]["resources"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
