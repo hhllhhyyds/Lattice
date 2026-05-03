@@ -699,6 +699,7 @@ mod tests {
             "http-remote".to_string(),
             lattice_mcp::McpServerConfig::Http(lattice_mcp::McpHttpServerConfig {
                 url: "https://example.com/mcp".to_string(),
+                bearer_token: None,
                 headers: std::collections::HashMap::new(),
             }),
         );
@@ -735,10 +736,7 @@ mod tests {
         assert_eq!(json["servers"][0]["name"], "http-remote");
         assert_eq!(json["servers"][0]["transport"], "http");
         assert_eq!(json["servers"][0]["state"], "failed");
-        assert!(json["servers"][0]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("unsupported"));
+        assert!(!json["servers"][0]["detail"].as_str().unwrap().is_empty());
         assert!(json["servers"][0]["tools"].as_array().unwrap().is_empty());
         assert!(json["servers"][0]["resources"]
             .as_array()
