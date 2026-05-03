@@ -14,8 +14,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 rmcp = { workspace = true }
 lattice-core = { path = "../core" }
+lattice-tools = { path = "../tools" }
 async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-lattice-tools = { path = "../tools" }
