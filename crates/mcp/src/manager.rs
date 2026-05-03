@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use rmcp::{
-    model::{CallToolRequestParams, ErrorCode, Tool},
+    model::{CallToolRequestParams, ErrorCode, ReadResourceRequestParams, ResourceContents, Tool},
     service::{RoleClient, RunningService, ServiceError},
     transport::TokioChildProcess,
     ServiceExt,
@@ -11,7 +11,8 @@ use tokio::process::Command;
 use tracing::warn;
 
 use crate::types::{
-    McpConnectionStatus, McpResourceInfo, McpServerConfig, McpStdioServerConfig, McpToolInfo,
+    McpConnectionSnapshot, McpConnectionStatus, McpResourceInfo, McpServerConfig,
+    McpStdioServerConfig, McpToolInfo,
 };
 use lattice_core::ToolError;
 
@@ -70,15 +71,21 @@ impl McpClientManager {
             .collect()
     }
 
+    #[must_use]
+    pub fn list_status_snapshots(&self) -> Vec<McpConnectionSnapshot> {
+        self.list_statuses()
+            .into_iter()
+            .map(|status| status.snapshot())
+            .collect()
+    }
+
     pub async fn call_tool(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: Value,
     ) -> Result<McpToolCallOutput, ToolError> {
-        let session = self.sessions.get(server_name).ok_or_else(|| {
-            ToolError::NotFound(format!("MCP server not connected: {server_name}"))
-        })?;
+        let session = self.require_session(server_name)?;
 
         let request = match arguments {
             Value::Null => CallToolRequestParams::new(tool_name.to_string()),
@@ -108,6 +115,16 @@ impl McpClientManager {
             output,
             structured_content: result.structured_content,
         })
+    }
+
+    pub async fn read_resource(&self, server_name: &str, uri: &str) -> Result<String, ToolError> {
+        let session = self.require_session(server_name)?;
+        let result = session
+            .read_resource(ReadResourceRequestParams::new(uri))
+            .await
+            .map_err(|err| map_read_resource_error(server_name, uri, &err))?;
+
+        Ok(render_read_resource_result(&result))
     }
 
     pub async fn connect_all(&mut self) {
@@ -248,6 +265,23 @@ impl McpClientManager {
         );
         self.sessions.insert(name.to_string(), client);
     }
+
+    fn require_session(
+        &self,
+        server_name: &str,
+    ) -> Result<&RunningService<RoleClient, ()>, ToolError> {
+        self.sessions.get(server_name).ok_or_else(|| {
+            let detail = self
+                .statuses
+                .get(server_name)
+                .map(|status| status.detail.as_str())
+                .filter(|detail| !detail.is_empty())
+                .unwrap_or("server is not connected");
+            ToolError::NotFound(format!(
+                "MCP server '{server_name}' is not connected: {detail}"
+            ))
+        })
+    }
 }
 
 fn to_tool_info(server_name: &str, tool: Tool) -> McpToolInfo {
@@ -279,6 +313,47 @@ fn render_tool_result(result: &rmcp::model::CallToolResult) -> String {
     }
 
     String::new()
+}
+
+fn render_read_resource_result(result: &rmcp::model::ReadResourceResult) -> String {
+    result
+        .contents
+        .iter()
+        .map(render_resource_contents)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_resource_contents(content: &ResourceContents) -> String {
+    match content {
+        ResourceContents::TextResourceContents { text, .. } => text.clone(),
+        ResourceContents::BlobResourceContents { blob, .. } => blob.clone(),
+    }
+}
+
+fn map_read_resource_error(server_name: &str, uri: &str, err: &ServiceError) -> ToolError {
+    match err {
+        ServiceError::McpError(error) if error.code == ErrorCode::RESOURCE_NOT_FOUND => {
+            ToolError::NotFound(format!(
+                "MCP resource not found on server '{server_name}': {uri}"
+            ))
+        }
+        ServiceError::McpError(error) if error.code == ErrorCode::INVALID_PARAMS => {
+            ToolError::InvalidParams(format!(
+                "MCP resource read rejected by server '{server_name}' for '{uri}': {}",
+                error.message
+            ))
+        }
+        ServiceError::McpError(error) if error.code == ErrorCode::METHOD_NOT_FOUND => {
+            ToolError::ExecutionFailed(format!(
+                "MCP server '{server_name}' does not support resource reads: {}",
+                error.message
+            ))
+        }
+        _ => ToolError::ExecutionFailed(format!(
+            "MCP resource read failed on server '{server_name}' for '{uri}': {err}"
+        )),
+    }
 }
 
 fn json_type_name(value: &Value) -> &'static str {
