@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use lattice_core::ToolExecutor;
 use lattice_mcp::{
-    McpClientManager, McpConnectionState, McpHttpServerConfig, McpServerConfig,
-    McpStdioServerConfig, McpWebSocketServerConfig,
+    mcp_tool_name, McpClientManager, McpConnectionState, McpHttpServerConfig, McpServerConfig,
+    McpStdioServerConfig, McpToolAdapter, McpWebSocketServerConfig,
 };
+use lattice_tools::ToolSet;
 use rmcp::{
     model::ReadResourceRequestParams, service::RoleClient, transport::TokioChildProcess, ServiceExt,
 };
@@ -91,12 +94,13 @@ async fn stdio_manager_connects_and_discovers_tools_and_resources() {
     let statuses = manager.list_statuses();
     assert_eq!(statuses.len(), 1);
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
-    assert_eq!(statuses[0].tools.len(), 1);
-    assert_eq!(statuses[0].tools[0].name, "hello");
+    assert_eq!(statuses[0].tools.len(), 2);
+    assert!(statuses[0].tools.iter().any(|tool| tool.name == "hello"));
+    assert!(statuses[0].tools.iter().any(|tool| tool.name == "fail"));
     assert_eq!(statuses[0].resources.len(), 1);
     assert_eq!(statuses[0].resources[0].uri, "fixture://readme");
 
-    assert_eq!(manager.list_tools().len(), 1);
+    assert_eq!(manager.list_tools().len(), 2);
     assert_eq!(manager.list_resources().len(), 1);
 
     manager.close().await;
@@ -191,7 +195,7 @@ async fn reconnect_all_reestablishes_sessions() {
 
     let statuses = manager.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
-    assert_eq!(statuses[0].tools[0].name, "hello");
+    assert!(statuses[0].tools.iter().any(|tool| tool.name == "hello"));
 }
 
 #[tokio::test]
@@ -254,7 +258,7 @@ async fn reconnect_all_recovers_failed_stdio_session() {
 
     let statuses = recovered.list_statuses();
     assert_eq!(statuses[0].state, McpConnectionState::Connected);
-    assert_eq!(statuses[0].tools.len(), 1);
+    assert_eq!(statuses[0].tools.len(), 2);
     assert_eq!(statuses[0].resources.len(), 1);
 }
 
@@ -327,9 +331,13 @@ async fn list_statuses_tools_and_resources_are_sorted_and_aggregated() {
     assert_eq!(statuses[1].state, McpConnectionState::Connected);
 
     let tools = manager.list_tools();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].server_name, "z-fixture");
-    assert_eq!(tools[0].name, "hello");
+    assert_eq!(tools.len(), 2);
+    assert!(tools
+        .iter()
+        .any(|tool| { tool.server_name == "z-fixture" && tool.name == "hello" }));
+    assert!(tools
+        .iter()
+        .any(|tool| { tool.server_name == "z-fixture" && tool.name == "fail" }));
 
     let resources = manager.list_resources();
     assert_eq!(resources.len(), 1);
@@ -363,4 +371,111 @@ async fn direct_client_can_read_fixture_resource() {
         .await
         .expect("resource read should succeed");
     assert_eq!(read.contents.len(), 1);
+}
+
+#[tokio::test]
+async fn manager_can_call_mcp_tool() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let output = manager
+        .call_tool("fixture", "hello", serde_json::json!({ "name": "lattice" }))
+        .await
+        .unwrap();
+    assert_eq!(output.output, "fixture-hello:lattice");
+    assert_eq!(output.structured_content, None);
+}
+
+#[tokio::test]
+async fn manager_rejects_non_object_tool_arguments() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let err = manager
+        .call_tool("fixture", "hello", serde_json::json!(["bad"]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, lattice_core::ToolError::InvalidParams(_)));
+    assert!(err.to_string().contains("JSON object"));
+}
+
+#[tokio::test]
+async fn manager_surfaces_remote_tool_error() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+
+    let err = manager
+        .call_tool("fixture", "fail", serde_json::json!({ "reason": "boom" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, lattice_core::ToolError::ExecutionFailed(_)));
+    assert!(err.to_string().contains("fixture-fail:boom"));
+}
+
+#[tokio::test]
+async fn mcp_tool_adapter_registers_into_toolset_and_executes() {
+    let mut configs = HashMap::new();
+    configs.insert(
+        "fixture".to_string(),
+        McpServerConfig::Stdio(McpStdioServerConfig {
+            command: fixture_binary("fixture_mcp_server"),
+            args: vec![],
+            env: None,
+            cwd: None,
+        }),
+    );
+
+    let mut manager = McpClientManager::new(configs);
+    manager.connect_all().await;
+    let manager = Arc::new(manager);
+
+    let mut set = ToolSet::new();
+    for tool in McpToolAdapter::from_manager(manager) {
+        if tool.description().name.ends_with("__hello") {
+            set.register(tool).unwrap();
+            break;
+        }
+    }
+
+    let result = set
+        .execute(
+            &mcp_tool_name("fixture", "hello"),
+            serde_json::json!({ "name": "bridge" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.stdout, "fixture-hello:bridge");
 }

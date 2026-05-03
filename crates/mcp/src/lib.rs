@@ -5,9 +5,11 @@
 //! multi-server client manager.
 
 mod manager;
+mod tool_adapter;
 mod types;
 
-pub use manager::McpClientManager;
+pub use manager::{McpClientManager, McpToolCallOutput};
+pub use tool_adapter::{mcp_tool_name, McpToolAdapter};
 pub use types::{
     McpConnectionState, McpConnectionStatus, McpHttpServerConfig, McpJsonConfig, McpResourceInfo,
     McpServerConfig, McpStdioServerConfig, McpToolInfo, McpWebSocketServerConfig,
