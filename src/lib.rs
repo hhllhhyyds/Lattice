@@ -36,6 +36,10 @@ pub use lattice_sandbox_local as sandbox_local;
 #[cfg(feature = "tools")]
 pub use lattice_tools as tools;
 
+/// Skill system — skill loading, SkillTool, and SkillToolSet.
+#[cfg(feature = "skill")]
+pub use lattice_skill as skill;
+
 /// Common LLM protocol layer.
 #[cfg(feature = "llm-protocol")]
 pub use lattice_llm_protocol as llm_protocol;

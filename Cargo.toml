@@ -25,6 +25,9 @@ sandbox-local = ["dep:lattice-sandbox-local"]
 # Tool set (ToolSet + standard tools)
 tools = ["dep:lattice-tools"]
 
+# Skill system
+skill = ["dep:lattice-skill", "tools"]
+
 # LLM backends
 llm-protocol = ["dep:lattice-llm-protocol"]
 llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
@@ -32,7 +35,7 @@ llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
 llm-all = ["llm-anthropic", "llm-openai"]
 
 # Convenience
-full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools", "skill"]
 
 [dev-dependencies]
 dotenvy = { workspace = true }
@@ -45,6 +48,7 @@ lattice-runtime = { path = "crates/runtime", optional = true }
 lattice-store-memory = { path = "crates/store-memory", optional = true }
 lattice-sandbox-local = { path = "crates/sandbox-local", optional = true }
 lattice-tools = { path = "crates/tools", optional = true }
+lattice-skill = { path = "crates/skill", optional = true }
 lattice-llm-protocol = { path = "crates/llm-protocol", optional = true }
 lattice-llm-anthropic = { path = "crates/llm-anthropic", optional = true }
 lattice-llm-openai = { path = "crates/llm-openai", optional = true }
@@ -65,6 +69,7 @@ members = [
     "crates/server",
     "examples/hello-agent",
     "examples/real-agent",
+    "examples/meta-agent",
 ]
 
 [workspace.package]
