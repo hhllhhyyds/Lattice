@@ -67,6 +67,19 @@ impl AnthropicClient {
         self
     }
 
+    /// Set HTTP request timeout.
+    ///
+    /// Default is 120 seconds. For complex reasoning tasks (e.g., extended thinking),
+    /// you may want to increase this to 180-300 seconds.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.http = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .expect("failed to build HTTP client");
+        self
+    }
+
     /// Convert protocol messages to Anthropic format.
     fn to_anthropic_messages(&self, messages: &[Message]) -> Vec<AnthropicMessage> {
         messages
