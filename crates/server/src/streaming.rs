@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lattice_core::{Actor, Event, EventFilter, EventId, EventPayload, SessionId, SessionStore};
+use lattice_core::{
+    Actor, ChildSessionInfo, Event, EventFilter, EventId, EventPayload, SessionId, SessionStore,
+};
 use tokio::sync::{broadcast, RwLock};
 
 /// Per-session in-process event channels.
@@ -129,6 +131,23 @@ impl SessionStore for NotifyingStore {
         session_id: SessionId,
     ) -> Result<Option<EventId>, lattice_core::StoreError> {
         self.inner.latest_event_id(session_id).await
+    }
+
+    async fn create_child_session(
+        &self,
+        parent_session_id: SessionId,
+        skill_name: &str,
+    ) -> Result<(SessionId, Arc<dyn SessionStore>), lattice_core::StoreError> {
+        self.inner
+            .create_child_session(parent_session_id, skill_name)
+            .await
+    }
+
+    async fn child_sessions(
+        &self,
+        parent_session_id: SessionId,
+    ) -> Result<Vec<ChildSessionInfo>, lattice_core::StoreError> {
+        self.inner.child_sessions(parent_session_id).await
     }
 }
 

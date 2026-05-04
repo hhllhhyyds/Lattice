@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lattice_core::{ExecutionResult, ToolDescription, ToolError, ToolExecutor};
+use lattice_core::{ExecutionContext, ExecutionResult, ToolDescription, ToolError, ToolExecutor};
 use serde_json::Value;
 
 use crate::{McpClientManager, McpToolInfo};
@@ -49,7 +49,11 @@ impl ToolExecutor for McpToolAdapter {
         }
     }
 
-    async fn execute(&self, params: Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let output = self
             .manager
             .call_tool(&self.tool_info.server_name, &self.tool_info.name, params)

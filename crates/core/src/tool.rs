@@ -81,6 +81,10 @@ mod tests {
             Ok(SessionId::new_v4())
         }
 
+        async fn delete_session(&self, _session_id: SessionId) -> Result<(), StoreError> {
+            Ok(())
+        }
+
         async fn append_event(
             &self,
             _session_id: SessionId,

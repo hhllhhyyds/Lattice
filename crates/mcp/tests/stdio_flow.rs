@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lattice_core::ToolExecutor;
+use lattice_core::{ExecutionContext, SessionStore, ToolExecutor};
 use lattice_mcp::{
     load_mcp_manager_from_env, load_mcp_server_configs_from_path, mcp_tool_name,
     register_mcp_tools, ListMcpResourcesTool, McpClientManager, McpConnectionState,
@@ -17,6 +17,71 @@ use rmcp::{
 use tokio::process::Command;
 
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn mock_execution_context() -> ExecutionContext {
+    use async_trait::async_trait;
+    use lattice_core::{Actor, Event, EventFilter, EventId, EventPayload, SessionId, StoreError};
+
+    struct MockStore;
+
+    #[async_trait]
+    impl SessionStore for MockStore {
+        async fn create_session(&self) -> Result<SessionId, StoreError> {
+            Ok(SessionId::new_v4())
+        }
+
+        async fn delete_session(&self, _session_id: SessionId) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        async fn append_event(
+            &self,
+            _session_id: SessionId,
+            _payload: EventPayload,
+            _actor: Actor,
+            _parent_event_id: Option<EventId>,
+        ) -> Result<EventId, StoreError> {
+            Ok(EventId::new_v4())
+        }
+
+        async fn get_events(
+            &self,
+            _session_id: SessionId,
+            _filter: &EventFilter,
+        ) -> Result<Vec<Event>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn create_child_session(
+            &self,
+            _parent_session_id: SessionId,
+            _skill_name: &str,
+        ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError> {
+            Ok((SessionId::new_v4(), Arc::new(MockStore)))
+        }
+
+        async fn child_sessions(
+            &self,
+            _parent_session_id: SessionId,
+        ) -> Result<Vec<lattice_core::ChildSessionInfo>, StoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn latest_event_id(
+            &self,
+            _session_id: SessionId,
+        ) -> Result<Option<EventId>, StoreError> {
+            Ok(None)
+        }
+    }
+
+    ExecutionContext {
+        session_id: SessionId::new_v4(),
+        trigger_event_id: EventId::new_v4(),
+        store: Arc::new(MockStore),
+        depth: 0,
+    }
+}
 
 fn fixture_binary(name: &str) -> String {
     let key = format!("CARGO_BIN_EXE_{name}");
@@ -624,6 +689,7 @@ async fn mcp_tool_adapter_registers_into_toolset_and_executes() {
         .execute(
             &mcp_tool_name("fixture", "hello"),
             serde_json::json!({ "name": "bridge" }),
+            &mock_execution_context(),
         )
         .await
         .unwrap();
