@@ -18,10 +18,10 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
             EventPayload::UserMessage { content } => {
                 messages.push(Message::text(Role::User, content.clone()));
             }
-            EventPayload::Thinking { reasoning } => {
-                // Thinking is emitted as assistant text so the LLM can see
-                // its own prior reasoning chain.
-                messages.push(Message::text(Role::Assistant, reasoning.clone()));
+            EventPayload::Thinking { .. } => {
+                // Internal reasoning — do not include in LLM messages.
+                // The event is preserved in the store for debugging/audit,
+                // but the LLM does not need to see its own prior reasoning.
             }
             EventPayload::ToolCallRequested { tool, params } => {
                 let id = event.event_id.to_string();
@@ -304,6 +304,31 @@ mod tests {
                 assert_eq!(tool_use_id, &second_tool_event_id.to_string());
             }
             _ => panic!("expected second tool result block"),
+        }
+    }
+
+    #[test]
+    fn test_thinking_events_skipped() {
+        let events = vec![
+            make_event(EventPayload::UserMessage {
+                content: "What is 2+2?".into(),
+            }),
+            make_event(EventPayload::Thinking {
+                reasoning: "I need to calculate 2+2. The answer is 4.".into(),
+            }),
+            make_event(EventPayload::FinalAnswer { answer: "4".into() }),
+        ];
+        let messages = events_to_messages(&events);
+
+        // Should only have UserMessage and FinalAnswer, Thinking is skipped
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
+
+        // Verify the assistant message is the FinalAnswer, not the Thinking
+        match &messages[1].content[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "4"),
+            _ => panic!("expected text block"),
         }
     }
 
