@@ -372,8 +372,13 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use lattice_core::{Decision, Event, LLMError, ToolDescription};
+    use chrono::{Duration, SecondsFormat, Timelike};
+    use lattice_core::{
+        Actor, Decision, Event, EventFilter, EventId, EventPayload, LLMError, SessionId,
+        StoreError, ToolDescription,
+    };
     use std::sync::Mutex;
+    use tokio::sync::RwLock;
     use tower::ServiceExt;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -381,6 +386,102 @@ mod tests {
     fn make_app() -> Router {
         let store = Arc::new(lattice_store_memory::MemoryStore::new());
         router(new_state(store))
+    }
+
+    struct FixedStore {
+        session_id: SessionId,
+        events: Vec<Event>,
+        last_filter: RwLock<Option<EventFilter>>,
+    }
+
+    impl FixedStore {
+        fn new(session_id: SessionId, events: Vec<Event>) -> Self {
+            Self {
+                session_id,
+                events,
+                last_filter: RwLock::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl lattice_core::SessionStore for FixedStore {
+        async fn create_session(&self) -> Result<SessionId, StoreError> {
+            Ok(self.session_id)
+        }
+
+        async fn delete_session(&self, session_id: SessionId) -> Result<(), StoreError> {
+            if session_id == self.session_id {
+                Ok(())
+            } else {
+                Err(StoreError::SessionNotFound(session_id))
+            }
+        }
+
+        async fn append_event(
+            &self,
+            _session_id: SessionId,
+            _payload: EventPayload,
+            _actor: Actor,
+            _parent_event_id: Option<EventId>,
+        ) -> Result<EventId, StoreError> {
+            panic!("append_event not used in this test")
+        }
+
+        async fn get_events(
+            &self,
+            session_id: SessionId,
+            filter: &EventFilter,
+        ) -> Result<Vec<Event>, StoreError> {
+            if session_id != self.session_id {
+                return Err(StoreError::SessionNotFound(session_id));
+            }
+
+            *self.last_filter.write().await = Some(filter.clone());
+
+            let mut events = self.events.clone();
+            if let Some(actor) = filter.actor {
+                events.retain(|event| event.actor == actor);
+            }
+            if let Some(payload_type) = filter.payload_type {
+                events.retain(|event| {
+                    let json = serde_json::to_value(&event.payload).ok();
+                    json.as_ref()
+                        .and_then(|value| value.get("type"))
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|value| value == payload_type)
+                });
+            }
+            if let Some(after_event_id) = filter.after_event_id {
+                events = events
+                    .into_iter()
+                    .skip_while(|event| event.event_id != after_event_id)
+                    .skip(1)
+                    .collect();
+            }
+            if let Some(since) = filter.since {
+                events.retain(|event| event.timestamp >= since);
+            }
+            if let Some(until) = filter.until {
+                events.retain(|event| event.timestamp <= until);
+            }
+            if let Some(limit) = filter.limit {
+                events.truncate(limit);
+            }
+
+            Ok(events)
+        }
+
+        async fn latest_event_id(
+            &self,
+            session_id: SessionId,
+        ) -> Result<Option<EventId>, StoreError> {
+            if session_id != self.session_id {
+                return Err(StoreError::SessionNotFound(session_id));
+            }
+
+            Ok(self.events.last().map(|event| event.event_id))
+        }
     }
 
     struct TestLlm {
@@ -1263,5 +1364,112 @@ mod tests {
         let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(evts["events"].as_array().unwrap().is_empty());
         assert!(!evts["hasMore"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn get_events_with_time_range_filters() {
+        let base = Utc::now().with_nanosecond(0).unwrap();
+        let session_id = SessionId::new_v4();
+        let after_event_id = EventId::new_v4();
+        let store = Arc::new(FixedStore::new(
+            session_id,
+            vec![
+                Event {
+                    event_id: EventId::new_v4(),
+                    session_id,
+                    timestamp: base,
+                    actor: Actor::System,
+                    payload: EventPayload::SessionCreated,
+                    parent_event_id: None,
+                },
+                Event {
+                    event_id: after_event_id,
+                    session_id,
+                    timestamp: base + Duration::seconds(10),
+                    actor: Actor::Harness,
+                    payload: EventPayload::UserMessage {
+                        content: "first".into(),
+                    },
+                    parent_event_id: None,
+                },
+                Event {
+                    event_id: EventId::new_v4(),
+                    session_id,
+                    timestamp: base + Duration::seconds(20),
+                    actor: Actor::LLM,
+                    payload: EventPayload::Thinking {
+                        reasoning: "second".into(),
+                    },
+                    parent_event_id: None,
+                },
+                Event {
+                    event_id: EventId::new_v4(),
+                    session_id,
+                    timestamp: base + Duration::seconds(30),
+                    actor: Actor::LLM,
+                    payload: EventPayload::FinalAnswer {
+                        answer: "third".into(),
+                    },
+                    parent_event_id: None,
+                },
+            ],
+        ));
+        let state = new_state(store.clone());
+        state.sessions.write().await.push(SessionInfo {
+            session_id,
+            created_at: base,
+            metadata: None,
+        });
+        let app = router(state);
+        let since = (base + Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let until = (base + Duration::seconds(25)).to_rfc3339_opts(SecondsFormat::Secs, true);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/events?after={after_event_id}&since={since}&until={until}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let events = evts["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["payload"]["type"], "thinking");
+        assert!(!evts["hasMore"].as_bool().unwrap());
+        let first_filter = store.last_filter.read().await.clone().unwrap();
+        assert_eq!(first_filter.after_event_id, Some(after_event_id));
+        assert_eq!(first_filter.since, Some(base + Duration::seconds(15)));
+        assert_eq!(first_filter.until, Some(base + Duration::seconds(25)));
+        assert_eq!(first_filter.limit, Some(101));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/sessions/{session_id}/events?since={since}&until={until}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let evts: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let events = evts["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["payload"]["type"], "thinking");
+        let second_filter = store.last_filter.read().await.clone().unwrap();
+        assert_eq!(second_filter.after_event_id, None);
+        assert_eq!(second_filter.since, Some(base + Duration::seconds(15)));
+        assert_eq!(second_filter.until, Some(base + Duration::seconds(25)));
+        assert_eq!(second_filter.limit, Some(101));
     }
 }
