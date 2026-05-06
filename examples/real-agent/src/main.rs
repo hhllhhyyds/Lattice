@@ -180,8 +180,12 @@ async fn run(task: String) -> Result<()> {
                     truncate(stderr, 40)
                 )
             }
-            EventPayload::ToolCallError { error } => {
-                format!("ToolError: {}", truncate(error, 80))
+            EventPayload::ToolCallError { error, error_kind } => {
+                format!(
+                    "ToolError: kind={} message={}",
+                    error_kind.as_str(),
+                    truncate(error, 80)
+                )
             }
             EventPayload::FinalAnswer { answer } => {
                 format!("FinalAnswer: {}", truncate(answer, 80))

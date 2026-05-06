@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::event::SessionId;
+use crate::event::{SessionId, ToolErrorKind};
 
 /// Error from the session store.
 #[derive(Debug, Clone, Error)]
@@ -75,10 +75,24 @@ pub enum ToolError {
     Other(String),
 }
 
+impl ToolError {
+    #[must_use]
+    pub fn kind(&self) -> ToolErrorKind {
+        match self {
+            Self::NotFound(_) => ToolErrorKind::NotFound,
+            Self::InvalidParams(_) => ToolErrorKind::InvalidParams,
+            Self::ExecutionFailed(_) => ToolErrorKind::ExecutionFailed,
+            Self::Timeout { .. } => ToolErrorKind::Timeout,
+            Self::Other(_) => ToolErrorKind::Other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::StoreError;
     use super::{LLMError, SandboxError, ToolError};
+    use crate::ToolErrorKind;
 
     #[test]
     fn test_store_error_display() {
@@ -139,5 +153,29 @@ mod tests {
 
         let err = ToolError::Other("misc".to_string());
         assert_eq!(err.to_string(), "tool error: misc");
+    }
+
+    #[test]
+    fn test_tool_error_kind_mapping() {
+        assert_eq!(
+            ToolError::NotFound("bash".to_string()).kind(),
+            ToolErrorKind::NotFound
+        );
+        assert_eq!(
+            ToolError::InvalidParams("missing key".to_string()).kind(),
+            ToolErrorKind::InvalidParams
+        );
+        assert_eq!(
+            ToolError::ExecutionFailed("segfault".to_string()).kind(),
+            ToolErrorKind::ExecutionFailed
+        );
+        assert_eq!(
+            ToolError::Timeout { timeout_secs: 60 }.kind(),
+            ToolErrorKind::Timeout
+        );
+        assert_eq!(
+            ToolError::Other("misc".to_string()).kind(),
+            ToolErrorKind::Other
+        );
     }
 }

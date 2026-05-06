@@ -27,7 +27,36 @@ pub enum Actor {
     Sandbox,
 }
 
-/// Event payload — all possible events in the system.
+/// Structured category for tool execution failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    /// Tool name was not found in the registry.
+    NotFound,
+    /// Tool parameters failed validation.
+    InvalidParams,
+    /// Tool execution failed after starting.
+    ExecutionFailed,
+    /// Tool execution exceeded a timeout.
+    Timeout,
+    /// Fallback for uncategorized errors.
+    Other,
+}
+
+impl ToolErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::InvalidParams => "invalid_params",
+            Self::ExecutionFailed => "execution_failed",
+            Self::Timeout => "timeout",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Event payload - all possible events in the system.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum EventPayload {
@@ -49,7 +78,10 @@ pub enum EventPayload {
         exit_code: i32,
     },
     /// Tool call failed.
-    ToolCallError { error: String },
+    ToolCallError {
+        error: String,
+        error_kind: ToolErrorKind,
+    },
     /// LLM gave a final answer.
     FinalAnswer { answer: String },
     /// Session state changed.
@@ -107,6 +139,7 @@ mod tests {
             },
             EventPayload::ToolCallError {
                 error: "not found".to_string(),
+                error_kind: ToolErrorKind::NotFound,
             },
             EventPayload::FinalAnswer {
                 answer: "the answer".to_string(),
@@ -150,7 +183,7 @@ mod tests {
             content: "hello".to_string(),
         };
         let json = serde_json::to_string(&payload).unwrap();
-        assert!(json.contains(r#""type":"userMessage"#));
+        assert!(json.contains(r#""type":"userMessage""#));
         assert!(json.contains(r#""content":"hello""#));
     }
 
@@ -176,6 +209,18 @@ mod tests {
         assert!(json.contains(r#""type":"toolCallResult""#));
         assert!(json.contains(r#""stdout":"output""#));
         assert!(json.contains(r#""exit_code":0"#));
+    }
+
+    #[test]
+    fn test_tool_call_error_kind_tagged_format() {
+        let payload = EventPayload::ToolCallError {
+            error: "missing command".to_string(),
+            error_kind: ToolErrorKind::InvalidParams,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains(r#""type":"toolCallError""#));
+        assert!(json.contains(r#""error":"missing command""#));
+        assert!(json.contains(r#""error_kind":"invalid_params""#));
     }
 
     #[test]
