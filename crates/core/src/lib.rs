@@ -27,7 +27,7 @@ pub mod filter {
 
 // Re-exports for convenience.
 pub use error::{LLMError, SandboxError, StoreError, ToolError};
-pub use event::{Actor, Event, EventId, EventPayload, SessionId, Timestamp};
+pub use event::{Actor, Event, EventId, EventPayload, SessionId, Timestamp, ToolErrorKind};
 pub use filter::EventFilter;
 pub use llm::{Decision, LLMClient};
 pub use sandbox::{ExecutionResult, Sandbox};

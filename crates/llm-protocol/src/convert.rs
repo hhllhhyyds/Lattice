@@ -50,13 +50,13 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
                     }],
                 });
             }
-            EventPayload::ToolCallError { error } => {
+            EventPayload::ToolCallError { error, error_kind } => {
                 let tool_use_id = tool_use_id_from_parent(event);
                 messages.push(Message {
                     role: Role::Tool,
                     content: vec![ContentBlock::ToolResult {
                         tool_use_id,
-                        content: error.clone(),
+                        content: format_tool_error(error_kind.as_str(), error),
                         is_error: true,
                     }],
                 });
@@ -102,6 +102,10 @@ fn format_tool_result(stdout: &str, stderr: &str, exit_code: i32) -> String {
     }
     parts.push(format!("exit_code: {exit_code}"));
     parts.join("\n")
+}
+
+fn format_tool_error(error_kind: &str, error: &str) -> String {
+    format!("error_kind: {error_kind}\nmessage: {error}")
 }
 
 #[cfg(test)]
@@ -225,6 +229,7 @@ mod tests {
             make_event_with_parent(
                 EventPayload::ToolCallError {
                     error: "command not found".into(),
+                    error_kind: lattice_core::ToolErrorKind::NotFound,
                 },
                 Some(tool_event_id),
             ),
@@ -238,7 +243,7 @@ mod tests {
                 is_error,
             } => {
                 assert_eq!(tool_use_id, &tool_event_id.to_string());
-                assert_eq!(content, "command not found");
+                assert_eq!(content, "error_kind: not_found\nmessage: command not found");
                 assert!(is_error);
             }
             _ => panic!("expected tool result block"),

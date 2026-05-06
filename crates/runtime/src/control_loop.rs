@@ -185,12 +185,14 @@ impl ControlLoop {
                         Err(e) => {
                             warn!("tool execution failed: {}", e);
                             let error_str = e.to_string();
+                            let error_kind = e.kind();
                             let error_event_id = self
                                 .store
                                 .append_event(
                                     session_id,
                                     EventPayload::ToolCallError {
                                         error: error_str.clone(),
+                                        error_kind,
                                     },
                                     Actor::Sandbox,
                                     Some(req_event_id),
@@ -204,7 +206,10 @@ impl ControlLoop {
                                 session_id,
                                 timestamp: chrono::Utc::now(),
                                 actor: Actor::Sandbox,
-                                payload: EventPayload::ToolCallError { error: error_str },
+                                payload: EventPayload::ToolCallError {
+                                    error: error_str,
+                                    error_kind,
+                                },
                                 parent_event_id: Some(req_event_id),
                             });
                         }
@@ -285,12 +290,14 @@ impl ControlLoop {
                             Err(e) => {
                                 warn!("tool execution failed: {}", e);
                                 let error_str = e.to_string();
+                                let error_kind = e.kind();
                                 let error_event_id = self
                                     .store
                                     .append_event(
                                         session_id,
                                         EventPayload::ToolCallError {
                                             error: error_str.clone(),
+                                            error_kind,
                                         },
                                         Actor::Sandbox,
                                         Some(req_event_id),
@@ -303,7 +310,10 @@ impl ControlLoop {
                                     session_id,
                                     timestamp: chrono::Utc::now(),
                                     actor: Actor::Sandbox,
-                                    payload: EventPayload::ToolCallError { error: error_str },
+                                    payload: EventPayload::ToolCallError {
+                                        error: error_str,
+                                        error_kind,
+                                    },
                                     parent_event_id: Some(req_event_id),
                                 });
                             }
@@ -729,12 +739,18 @@ mod tests {
             .get_events(session_id, &EventFilter::default())
             .await
             .unwrap();
-        let has_error = events
-            .iter()
-            .any(|e| matches!(e.payload, EventPayload::ToolCallError { .. }));
+        let error_event = events.iter().find(|e| {
+            matches!(
+                e.payload,
+                EventPayload::ToolCallError {
+                    error_kind: lattice_core::ToolErrorKind::NotFound,
+                    ..
+                }
+            )
+        });
         assert!(
-            has_error,
-            "expected ToolCallError in event log, got: {:?}",
+            error_event.is_some(),
+            "expected ToolCallError(NotFound) in event log, got: {:?}",
             events
         );
     }
