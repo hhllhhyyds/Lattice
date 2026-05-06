@@ -9,12 +9,15 @@ use lattice_core::{Event, ToolDescription};
 use lattice_llm_protocol::convert::{events_to_messages, tool_descriptions_to_specs};
 use lattice_llm_protocol::message::{ContentBlock, Message, Role};
 use lattice_llm_protocol::response::LLMResponse;
+use tokio::time::sleep;
 use tracing::{debug, info, instrument};
 
 use crate::types::*;
 
 /// Default OpenAI API base URL.
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const MAX_RETRIES: usize = 2;
+const BASE_RETRY_DELAY_MS: u64 = 200;
 
 /// OpenAI-compatible LLM client.
 ///
@@ -241,6 +244,80 @@ impl OpenAIClient {
             ))
         }
     }
+
+    async fn post_chat_completions(
+        &self,
+        url: &str,
+        request: &OpenAIRequest,
+    ) -> Result<(reqwest::StatusCode, String), LLMError> {
+        for attempt in 0..=MAX_RETRIES {
+            let response = self
+                .http
+                .post(url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(request)
+                .send()
+                .await;
+
+            match response {
+                Ok(http_response) => {
+                    let status = http_response.status();
+                    let body = http_response.text().await;
+                    match body {
+                        Ok(body) => {
+                            if body.is_empty() && attempt < MAX_RETRIES {
+                                let delay = retry_delay(attempt);
+                                info!(
+                                    attempt = attempt + 1,
+                                    max_attempts = MAX_RETRIES + 1,
+                                    delay_ms = delay.as_millis(),
+                                    "OpenAI-compatible response body was empty, retrying"
+                                );
+                                sleep(delay).await;
+                                continue;
+                            }
+                            return Ok((status, body));
+                        }
+                        Err(err) => {
+                            if attempt < MAX_RETRIES && is_retryable_transport_error(&err) {
+                                let delay = retry_delay(attempt);
+                                info!(
+                                    attempt = attempt + 1,
+                                    max_attempts = MAX_RETRIES + 1,
+                                    delay_ms = delay.as_millis(),
+                                    error = %err,
+                                    "OpenAI-compatible response read failed, retrying"
+                                );
+                                sleep(delay).await;
+                                continue;
+                            }
+                            return Err(LLMError::RequestFailed(err.to_string()));
+                        }
+                    }
+                }
+                Err(err) => {
+                    if attempt < MAX_RETRIES && is_retryable_transport_error(&err) {
+                        let delay = retry_delay(attempt);
+                        info!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES + 1,
+                            delay_ms = delay.as_millis(),
+                            error = %err,
+                            "OpenAI-compatible request failed, retrying"
+                        );
+                        sleep(delay).await;
+                        continue;
+                    }
+
+                    info!("HTTP request failed: {}", err);
+                    return Err(LLMError::RequestFailed(err.to_string()));
+                }
+            }
+        }
+
+        unreachable!("retry loop should return or continue");
+    }
 }
 
 /// Extract concatenated text from content blocks.
@@ -288,26 +365,9 @@ impl lattice_core::LLMClient for OpenAIClient {
         );
 
         let url = format!("{}/chat/completions", self.base_url);
-        let http_response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                info!("HTTP request failed: {}", e);
-                LLMError::RequestFailed(e.to_string())
-            })?;
+        let (status, body) = self.post_chat_completions(&url, &request).await?;
 
-        info!("received HTTP response: status={}", http_response.status());
-
-        let status = http_response.status();
-        let body = http_response
-            .text()
-            .await
-            .map_err(|e| LLMError::RequestFailed(e.to_string()))?;
+        info!("received HTTP response: status={status}");
 
         debug!("response body length: {} bytes", body.len());
 
@@ -345,9 +405,22 @@ impl lattice_core::LLMClient for OpenAIClient {
     }
 }
 
+fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request() || err.is_body()
+}
+
+fn retry_delay(attempt: usize) -> Duration {
+    Duration::from_millis(BASE_RETRY_DELAY_MS * (1_u64 << attempt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use lattice_core::{Actor, EventId, EventPayload, LLMClient, SessionId};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::Mutex;
 
     #[test]
     fn test_parse_text_response() {
@@ -814,5 +887,210 @@ mod tests {
             }
             _ => panic!("expected Mixed with 2 tool calls, got {:?}", result),
         }
+    }
+
+    async fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut headers_end = None;
+
+        loop {
+            let mut chunk = [0_u8; 1024];
+            let read = stream.read(&mut chunk).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+
+            if headers_end.is_none() {
+                headers_end = buffer.windows(4).position(|window| window == b"\r\n\r\n");
+            }
+
+            if let Some(pos) = headers_end {
+                let headers_end_index = pos + 4;
+                let header_text = String::from_utf8_lossy(&buffer[..headers_end_index]);
+                let content_length = header_text
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        if name.eq_ignore_ascii_case("content-length") {
+                            value.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+
+                if buffer.len() >= headers_end_index + content_length {
+                    break;
+                }
+            }
+        }
+
+        String::from_utf8(buffer).unwrap()
+    }
+
+    async fn write_json_response(stream: &mut TcpStream, body: &str, connection_header: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: {connection_header}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        stream.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retries_second_request_after_connection_drop() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen_requests = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_requests_clone = seen_requests.clone();
+
+        let server = tokio::spawn(async move {
+            let tool_call_response = serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "cmd",
+                                "arguments": "{\"command\":\"dir\"}"
+                            }
+                        }]
+                    }
+                }]
+            })
+            .to_string();
+
+            let final_answer_response = serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "tool_calls": null
+                    }
+                }]
+            })
+            .to_string();
+
+            let (mut first_stream, _) = listener.accept().await.unwrap();
+            let first_request = read_http_request(&mut first_stream).await;
+            seen_requests_clone.lock().await.push(first_request);
+            write_json_response(&mut first_stream, &tool_call_response, "close").await;
+            drop(first_stream);
+
+            let (mut failed_stream, _) = listener.accept().await.unwrap();
+            let second_request = read_http_request(&mut failed_stream).await;
+            seen_requests_clone.lock().await.push(second_request);
+            drop(failed_stream);
+
+            let (mut retry_stream, _) = listener.accept().await.unwrap();
+            let third_request = read_http_request(&mut retry_stream).await;
+            seen_requests_clone.lock().await.push(third_request);
+            write_json_response(&mut retry_stream, &final_answer_response, "close").await;
+        });
+
+        let client =
+            OpenAIClient::new("test-key", "gpt-4o").with_base_url(format!("http://{addr}/v1"));
+        let tools = vec![ToolDescription {
+            name: "cmd".into(),
+            description: "Run a command".into(),
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"}
+                },
+                "required": ["command"]
+            }),
+        }];
+        let session_id = SessionId::new_v4();
+        let user_event_id = EventId::new_v4();
+        let request_event_id = EventId::new_v4();
+        let now = Utc::now();
+
+        let first_history = vec![
+            Event {
+                event_id: EventId::new_v4(),
+                session_id,
+                timestamp: now,
+                actor: Actor::System,
+                payload: EventPayload::SessionCreated,
+                parent_event_id: None,
+            },
+            Event {
+                event_id: user_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::System,
+                payload: EventPayload::UserMessage {
+                    content: "list files".into(),
+                },
+                parent_event_id: None,
+            },
+        ];
+
+        let first_decision = client
+            .decide(&first_history, &tools, "Use tools.")
+            .await
+            .unwrap();
+        match first_decision {
+            Decision::ToolCall { tool, params } => {
+                assert_eq!(tool, "cmd");
+                assert_eq!(params["command"], "dir");
+            }
+            other => panic!("expected tool call, got {other:?}"),
+        }
+
+        let second_history = vec![
+            first_history[0].clone(),
+            first_history[1].clone(),
+            Event {
+                event_id: request_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "cmd".into(),
+                    params: serde_json::json!({"command": "dir"}),
+                },
+                parent_event_id: Some(user_event_id),
+            },
+            Event {
+                event_id: EventId::new_v4(),
+                session_id,
+                timestamp: now,
+                actor: Actor::Sandbox,
+                payload: EventPayload::ToolCallResult {
+                    stdout: "file.txt".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+                parent_event_id: Some(request_event_id),
+            },
+        ];
+
+        let second_decision = client
+            .decide(&second_history, &tools, "Use tools.")
+            .await
+            .unwrap();
+        match second_decision {
+            Decision::FinalAnswer { answer } => assert_eq!(answer, "done"),
+            other => panic!("expected final answer, got {other:?}"),
+        }
+
+        server.await.unwrap();
+
+        let requests = seen_requests.lock().await;
+        assert_eq!(
+            requests.len(),
+            3,
+            "expected first call, failed retry, successful retry"
+        );
+        assert!(requests[1].contains("\"tool_call_id\""));
+        assert!(requests[1].contains("\"role\":\"tool\""));
+        assert!(requests[2].contains("\"tool_call_id\""));
+        assert!(requests[2].contains("\"role\":\"tool\""));
     }
 }
