@@ -19,8 +19,12 @@ cargo test --workspace --all-targets --all-features
 if command -v cargo-llvm-cov &> /dev/null; then
     echo ""
     echo "=== 3.5/4 Coverage ==="
-    cargo llvm-cov test --workspace --all-features -- --nocapture
-    cargo llvm-cov report --lcov
+    cargo llvm-cov test --workspace --all-features --lcov --output-path lcov.info -- --nocapture
+    echo "Coverage report: lcov.info"
+else
+    echo ""
+    echo "=== 3.5/4 Coverage skipped ==="
+    echo "cargo-llvm-cov not installed; skipping local coverage validation."
 fi
 
 echo ""
