@@ -36,7 +36,15 @@ impl ToolSet {
     /// - `BashTool` (if the `bash` feature is enabled)
     #[must_use]
     pub fn with_defaults(sandbox: Arc<dyn Sandbox>) -> Self {
+        #[cfg(feature = "bash")]
         let mut set = Self::new();
+
+        #[cfg(not(feature = "bash"))]
+        let set = {
+            let _ = sandbox;
+            Self::new()
+        };
+
         #[cfg(feature = "bash")]
         set.register(crate::bash::BashTool::new(sandbox))
             .expect("bash tool registration should not fail");
