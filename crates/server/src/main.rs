@@ -4,7 +4,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use lattice_server::{new_state, router};
+use lattice_server::{new_state_from_env, router};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -29,7 +29,35 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(lattice_store_memory::MemoryStore::new());
 
     // Build router and state.
-    let state = new_state(store);
+    let state = new_state_from_env(store)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    if let Some(manager) = &state.mcp_manager {
+        for snapshot in manager.list_status_snapshots() {
+            match snapshot.state {
+                lattice_mcp::McpConnectionState::Connected => {
+                    info!(
+                        server = %snapshot.name,
+                        transport = %snapshot.transport,
+                        tool_count = snapshot.tool_count,
+                        resource_count = snapshot.resource_count,
+                        "MCP server connected"
+                    );
+                }
+                lattice_mcp::McpConnectionState::Failed => {
+                    tracing::warn!(
+                        server = %snapshot.name,
+                        transport = %snapshot.transport,
+                        detail = %snapshot.detail,
+                        "MCP server failed to connect"
+                    );
+                }
+                lattice_mcp::McpConnectionState::Pending => {
+                    info!(server = %snapshot.name, "MCP server pending");
+                }
+            }
+        }
+    }
     let app = router(state);
 
     // Print startup banner.

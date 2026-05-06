@@ -16,6 +16,9 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::ge
 use chrono::{DateTime, Utc};
 pub use lattice_core::SessionId;
 use lattice_core::{LLMClient, Sandbox};
+use lattice_mcp::{
+    load_mcp_manager_from_env, register_mcp_tools, McpClientManager, McpConnectionSnapshot,
+};
 use lattice_runtime::ControlLoop;
 use lattice_sandbox_local::LocalSandbox;
 use lattice_tools::ToolSet;
@@ -38,6 +41,8 @@ pub struct AppState {
     pub llm_factory: Arc<dyn LlmClientFactory>,
     /// Tool registry used by agent runs.
     pub tools: Arc<ToolSet>,
+    /// Optional MCP manager backing registered MCP tools.
+    pub mcp_manager: Option<Arc<McpClientManager>>,
     /// Active ControlLoop task handles.
     pub active_runs: Arc<RwLock<HashMap<SessionId, RunHandle>>>,
     /// Server start time (for uptime reporting).
@@ -243,6 +248,8 @@ pub struct HealthResponse {
     pub uptime_seconds: i64,
     /// Which LLM providers are compiled in.
     pub features: serde_json::Value,
+    /// Current MCP server connection snapshots.
+    pub mcp_servers: Vec<McpConnectionSnapshot>,
 }
 
 /// Returns which LLM providers are enabled at compile time.
@@ -264,6 +271,11 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: uptime,
         features: enabled_features(),
+        mcp_servers: state
+            .mcp_manager
+            .as_ref()
+            .map(|manager| manager.list_status_snapshots())
+            .unwrap_or_default(),
     };
 
     (StatusCode::OK, Json(response))
@@ -290,11 +302,31 @@ fn app(state: AppState) -> Router {
 /// Creates a new AppState with the given session store.
 pub fn new_state(store: Arc<dyn lattice_core::SessionStore>) -> AppState {
     let sandbox: Arc<dyn Sandbox> = Arc::new(LocalSandbox::new());
-    new_state_with_components(
+    new_state_with_mcp_components(
         store,
         Arc::new(EnvLlmClientFactory),
         Arc::new(ToolSet::with_defaults(sandbox)),
+        None,
     )
+}
+
+/// Creates a new AppState using environment-backed MCP configuration when present.
+pub async fn new_state_from_env(
+    store: Arc<dyn lattice_core::SessionStore>,
+) -> Result<AppState, String> {
+    let sandbox: Arc<dyn Sandbox> = Arc::new(LocalSandbox::new());
+    let mut tools = ToolSet::with_defaults(sandbox);
+    let mcp_manager = load_mcp_manager_from_env().await?;
+    if let Some(manager) = &mcp_manager {
+        register_mcp_tools(&mut tools, Arc::clone(manager)).map_err(|err| err.to_string())?;
+    }
+
+    Ok(new_state_with_mcp_components(
+        store,
+        Arc::new(EnvLlmClientFactory),
+        Arc::new(tools),
+        mcp_manager,
+    ))
 }
 
 /// Creates a new AppState with injectable runtime components.
@@ -302,6 +334,16 @@ pub fn new_state_with_components(
     store: Arc<dyn lattice_core::SessionStore>,
     llm_factory: Arc<dyn LlmClientFactory>,
     tools: Arc<ToolSet>,
+) -> AppState {
+    new_state_with_mcp_components(store, llm_factory, tools, None)
+}
+
+/// Creates a new AppState with injectable runtime components and optional MCP manager.
+pub fn new_state_with_mcp_components(
+    store: Arc<dyn lattice_core::SessionStore>,
+    llm_factory: Arc<dyn LlmClientFactory>,
+    tools: Arc<ToolSet>,
+    mcp_manager: Option<Arc<McpClientManager>>,
 ) -> AppState {
     let event_hub = Arc::new(EventHub::new());
     let store: Arc<dyn lattice_core::SessionStore> =
@@ -312,6 +354,7 @@ pub fn new_state_with_components(
         event_hub,
         llm_factory,
         tools,
+        mcp_manager,
         active_runs: Arc::new(RwLock::new(HashMap::new())),
         started_at: Utc::now(),
         sessions: Arc::new(RwLock::new(Vec::new())),
@@ -402,6 +445,7 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Lattice Console"));
         assert!(html.contains("/ui/app.js"));
+        assert!(html.contains("mcp-panel"));
     }
 
     #[tokio::test]
@@ -455,6 +499,7 @@ mod tests {
         assert!(js.contains("loadSessions"));
         assert!(js.contains("sendMessage"));
         assert!(js.contains("deleteSession"));
+        assert!(js.contains("loadMcpStatus"));
     }
 
     #[tokio::test]
@@ -481,6 +526,7 @@ mod tests {
         assert!(json["features"].is_object());
         assert!(json["features"]["anthropic"].is_boolean());
         assert!(json["features"]["openai"].is_boolean());
+        assert!(json["mcp_servers"].is_array());
     }
 
     #[tokio::test]
@@ -568,12 +614,134 @@ mod tests {
             new_state_with_components(store, Arc::new(TestFactory), Arc::new(ToolSet::new()));
 
         assert_eq!(state.tools.len(), 0);
+        assert!(state.mcp_manager.is_none());
         let client = state.llm_factory.create(None, None).unwrap();
         let decision = client.decide(&[], &[], "").await.unwrap();
         match decision {
             Decision::FinalAnswer { answer } => assert_eq!(answer, "done"),
             _ => panic!("expected final answer"),
         }
+    }
+
+    #[tokio::test]
+    async fn health_reports_mcp_server_snapshots() {
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "http-remote".to_string(),
+            lattice_mcp::McpServerConfig::Http(lattice_mcp::McpHttpServerConfig {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token: None,
+                headers: std::collections::HashMap::new(),
+            }),
+        );
+        let mut manager = lattice_mcp::McpClientManager::new(configs);
+        manager.connect_all().await;
+
+        let state = new_state_with_mcp_components(
+            Arc::new(lattice_store_memory::MemoryStore::new()),
+            Arc::new(TestFactory),
+            Arc::new(ToolSet::new()),
+            Some(Arc::new(manager)),
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mcp_servers"].as_array().unwrap().len(), 1);
+        assert_eq!(json["mcp_servers"][0]["name"], "http-remote");
+        assert_eq!(json["mcp_servers"][0]["state"], "failed");
+        assert_eq!(json["mcp_servers"][0]["tool_count"], 0);
+        assert_eq!(json["mcp_servers"][0]["resource_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn mcp_status_route_reports_disabled_when_unconfigured() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["enabled"], false);
+        assert_eq!(json["serverCount"], 0);
+        assert_eq!(json["connectedCount"], 0);
+        assert_eq!(json["failedCount"], 0);
+        assert!(json["servers"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_status_route_reports_server_details() {
+        let mut configs = std::collections::HashMap::new();
+        configs.insert(
+            "http-remote".to_string(),
+            lattice_mcp::McpServerConfig::Http(lattice_mcp::McpHttpServerConfig {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token: None,
+                headers: std::collections::HashMap::new(),
+            }),
+        );
+        let mut manager = lattice_mcp::McpClientManager::new(configs);
+        manager.connect_all().await;
+
+        let state = new_state_with_mcp_components(
+            Arc::new(lattice_store_memory::MemoryStore::new()),
+            Arc::new(TestFactory),
+            Arc::new(ToolSet::new()),
+            Some(Arc::new(manager)),
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mcp")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["enabled"], true);
+        assert_eq!(json["serverCount"], 1);
+        assert_eq!(json["connectedCount"], 0);
+        assert_eq!(json["failedCount"], 1);
+        assert_eq!(json["servers"][0]["name"], "http-remote");
+        assert_eq!(json["servers"][0]["transport"], "http");
+        assert_eq!(json["servers"][0]["state"], "failed");
+        assert!(!json["servers"][0]["detail"].as_str().unwrap().is_empty());
+        assert!(json["servers"][0]["tools"].as_array().unwrap().is_empty());
+        assert!(json["servers"][0]["resources"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

@@ -23,7 +23,7 @@ use lattice::runtime::ControlLoop;
 use lattice::sandbox_local::LocalSandbox;
 use lattice::store_memory::MemoryStore;
 use lattice::tools::ToolSet;
-use tracing::info;
+use tracing::{info, warn};
 
 fn main() -> Result<()> {
     // Initialize tracing.
@@ -84,7 +84,38 @@ async fn run(task: String) -> Result<()> {
     // Assemble the agent components.
     let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
-    let tools = Arc::new(ToolSet::with_defaults(sandbox));
+    let mut tools = ToolSet::with_defaults(sandbox);
+    let mcp_manager = lattice_mcp::load_mcp_manager_from_env()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    if let Some(manager) = &mcp_manager {
+        lattice_mcp::register_mcp_tools(&mut tools, Arc::clone(manager))?;
+        for snapshot in manager.list_status_snapshots() {
+            match snapshot.state {
+                lattice_mcp::McpConnectionState::Connected => {
+                    info!(
+                        server = %snapshot.name,
+                        transport = %snapshot.transport,
+                        tool_count = snapshot.tool_count,
+                        resource_count = snapshot.resource_count,
+                        "MCP server connected"
+                    );
+                }
+                lattice_mcp::McpConnectionState::Failed => {
+                    warn!(
+                        server = %snapshot.name,
+                        transport = %snapshot.transport,
+                        detail = %snapshot.detail,
+                        "MCP server failed to connect"
+                    );
+                }
+                lattice_mcp::McpConnectionState::Pending => {
+                    info!(server = %snapshot.name, "MCP server pending");
+                }
+            }
+        }
+    }
+    let tools = Arc::new(tools);
     let control_loop = ControlLoop::with_options(
         store.clone(),
         llm,

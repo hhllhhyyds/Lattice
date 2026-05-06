@@ -202,6 +202,95 @@ http://127.0.0.1:3001
 - `Provider` 留空（使用服务端默认值）
 - `模型` 留空，或显式填写 `Pro/MiniMaxAI/MiniMax-M2.5`
 
+### MCP 配置接入
+
+`real-agent` 和 `lattice-server` 现在都支持在启动时加载 MCP 配置，并把 MCP tools 注入 `ToolSet`。
+
+当前入口是环境变量：
+
+```text
+LATTICE_MCP_CONFIG=/path/to/mcp.json
+```
+
+配置文件格式直接复用 `mcpServers` JSON。当前支持：
+
+- `stdio`
+- `http`
+- `ws`
+
+`stdio` 示例：
+
+```json
+{
+  "mcpServers": {
+    "fixture": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["./path/to/server.py"]
+    }
+  }
+}
+```
+
+远端 MCP 示例，支持 `bearer_token` 和自定义 headers：
+
+```json
+{
+  "mcpServers": {
+    "remote-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "bearer_token": "your_token",
+      "headers": {
+        "x-client-id": "lattice"
+      }
+    },
+    "remote-ws": {
+      "type": "ws",
+      "url": "wss://mcp.example.com/mcp",
+      "bearer_token": "your_token",
+      "headers": {
+        "x-client-id": "lattice"
+      }
+    }
+  }
+}
+```
+
+配置约束：
+
+- `bearer_token` 会自动写入 `Authorization: Bearer ...`
+- 如果已经配置 `bearer_token`，就不要再在 `headers` 里手动填写 `Authorization`
+- 远端 `http/ws` 连接失败时只影响对应 server，不会阻塞其他 MCP server 启动
+
+`real-agent` 示例：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
+
+cargo run -p real-agent -- "Use the MCP tools to inspect available resources"
+```
+
+`lattice-server` 示例：
+
+```powershell
+$env:LATTICE_LLM_PROVIDER="openai"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
+
+cargo run -p lattice-server
+```
+
+行为说明：
+
+- 如果未设置 `LATTICE_MCP_CONFIG`，系统按无 MCP 配置启动
+- 如果某个 MCP server 连接失败，其余 server 仍继续工作
+- `GET /health` 会返回 `mcp_servers` 快照，包含 `state / transport / tool_count / resource_count`
+
 ## LLM Provider 支持
 
 | Provider         | 包                      | 状态 |

@@ -19,6 +19,7 @@ lattice-runtime = { path = "../runtime" }
 lattice-store-memory = { path = "../store-memory" }
 lattice-sandbox-local = { path = "../sandbox-local" }
 lattice-tools = { path = "../tools" }
+lattice-mcp = { path = "../mcp" }
 lattice-llm-protocol = { path = "../llm-protocol", optional = true }
 lattice-llm-anthropic = { path = "../llm-anthropic", optional = true }
 lattice-llm-openai = { path = "../llm-openai", optional = true }
