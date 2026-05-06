@@ -29,6 +29,10 @@ pub struct EventQuery {
     pub event_type: Option<String>,
     /// Return events after this event id (cursor-based pagination).
     pub after: Option<EventId>,
+    /// Return events at or after this timestamp.
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Return events at or before this timestamp.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
     /// Maximum number of events to return (default 100).
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -226,60 +230,37 @@ async fn get_events(
         }
     }
 
-    // Build the store filter (actor only — payload_type/after/limit are post-filtered in memory).
-    let mut filter = EventFilter::default();
-    if let Some(actor) = query.actor {
-        filter.actor = Some(actor);
+    let payload_type = query
+        .event_type
+        .as_deref()
+        .and_then(payload_type_from_query);
+    if query.event_type.is_some() && payload_type.is_none() {
+        return Ok(Json(EventListResponse {
+            events: Vec::new(),
+            has_more: false,
+        }));
     }
+    let filter = EventFilter {
+        actor: query.actor,
+        payload_type,
+        after_event_id: query.after,
+        since: query.since,
+        until: query.until,
+        limit: Some(query.limit.saturating_add(1)),
+    };
 
-    let all_events = state
+    let events = state
         .store
         .get_events(session_id, &filter)
         .await
         .map_err(|e| AppError::InternalError(e.to_string()))?;
 
-    // Post-filter by event type (payload_type is not in EventFilter yet).
-    // The serialized tag matches serde's rename_all = "camelCase" on the enum.
-    let all_events = if let Some(ref et) = query.event_type {
-        all_events
-            .into_iter()
-            .filter(|e| {
-                let type_name = match &e.payload {
-                    lattice_core::EventPayload::SessionCreated => "sessionCreated",
-                    lattice_core::EventPayload::UserMessage { .. } => "userMessage",
-                    lattice_core::EventPayload::Thinking { .. } => "thinking",
-                    lattice_core::EventPayload::ToolCallRequested { .. } => "toolCallRequested",
-                    lattice_core::EventPayload::ToolCallResult { .. } => "toolCallResult",
-                    lattice_core::EventPayload::ToolCallError { .. } => "toolCallError",
-                    lattice_core::EventPayload::FinalAnswer { .. } => "finalAnswer",
-                    lattice_core::EventPayload::StateChange { .. } => "stateChange",
-                };
-                type_name == et
-            })
-            .collect::<Vec<_>>()
-    } else {
-        all_events
-    };
-
-    // Post-filter by `after` cursor.
-    let events: Vec<EventResponse> = if let Some(after_id) = query.after {
-        all_events
-            .into_iter()
-            .skip_while(|e| e.event_id != after_id)
-            .skip(1) // skip the `after` event itself
-            .take(query.limit + 1)
-            .map(EventResponse::from)
-            .collect()
-    } else {
-        all_events
-            .into_iter()
-            .take(query.limit + 1)
-            .map(EventResponse::from)
-            .collect()
-    };
-
     let has_more = events.len() > query.limit;
-    let events = events.into_iter().take(query.limit).collect::<Vec<_>>();
+    let events = events
+        .into_iter()
+        .take(query.limit)
+        .map(EventResponse::from)
+        .collect::<Vec<_>>();
 
     Ok(Json(EventListResponse { events, has_more }))
 }
@@ -718,6 +699,20 @@ fn done_event(session_id: SessionId) -> SseEvent {
         "status": "completed",
     });
     SseEvent::default().event("done").data(data.to_string())
+}
+
+fn payload_type_from_query(event_type: &str) -> Option<&'static str> {
+    match event_type {
+        "sessionCreated" => Some("sessionCreated"),
+        "userMessage" => Some("userMessage"),
+        "thinking" => Some("thinking"),
+        "toolCallRequested" => Some("toolCallRequested"),
+        "toolCallResult" => Some("toolCallResult"),
+        "toolCallError" => Some("toolCallError"),
+        "finalAnswer" => Some("finalAnswer"),
+        "stateChange" => Some("stateChange"),
+        _ => None,
+    }
 }
 
 async fn session_has_terminal_event(

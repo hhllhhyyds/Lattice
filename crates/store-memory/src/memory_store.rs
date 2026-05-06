@@ -117,6 +117,26 @@ impl SessionStore for MemoryStore {
             });
         }
 
+        if let Some(after_event_id) = filter.after_event_id {
+            result = result
+                .into_iter()
+                .skip_while(|e| e.event_id != after_event_id)
+                .skip(1)
+                .collect();
+        }
+
+        if let Some(since) = filter.since {
+            result.retain(|e| e.timestamp >= since);
+        }
+
+        if let Some(until) = filter.until {
+            result.retain(|e| e.timestamp <= until);
+        }
+
+        if let Some(limit) = filter.limit {
+            result.truncate(limit);
+        }
+
         Ok(result)
     }
 
@@ -133,6 +153,7 @@ impl SessionStore for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use lattice_core::EventPayload;
 
     #[tokio::test]
@@ -234,6 +255,10 @@ mod tests {
                 &EventFilter {
                     actor: Some(Actor::LLM),
                     payload_type: None,
+                    after_event_id: None,
+                    since: None,
+                    until: None,
+                    limit: None,
                 },
             )
             .await
@@ -286,6 +311,10 @@ mod tests {
                 &EventFilter {
                     actor: None,
                     payload_type: Some("thinking"),
+                    after_event_id: None,
+                    since: None,
+                    until: None,
+                    limit: None,
                 },
             )
             .await
@@ -298,11 +327,83 @@ mod tests {
                 &EventFilter {
                     actor: None,
                     payload_type: Some("toolCallRequested"),
+                    after_event_id: None,
+                    since: None,
+                    until: None,
+                    limit: None,
                 },
             )
             .await
             .unwrap();
         assert_eq!(tool_events.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_filter_by_time_range_after_and_limit() {
+        let store = MemoryStore::new();
+        let id = store.create_session().await.unwrap();
+
+        let first_id = store
+            .append_event(
+                id,
+                EventPayload::UserMessage {
+                    content: "first".to_string(),
+                },
+                Actor::Harness,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                id,
+                EventPayload::Thinking {
+                    reasoning: "second".to_string(),
+                },
+                Actor::LLM,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                id,
+                EventPayload::FinalAnswer {
+                    answer: "third".to_string(),
+                },
+                Actor::LLM,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let base = Utc::now();
+        {
+            let mut sessions = store.sessions.write().await;
+            let events = sessions.get_mut(&id).unwrap();
+            events[0].timestamp = base;
+            events[1].timestamp = base + Duration::seconds(10);
+            events[2].timestamp = base + Duration::seconds(20);
+            events[3].timestamp = base + Duration::seconds(30);
+        }
+
+        let filtered = store
+            .get_events(
+                id,
+                &EventFilter {
+                    actor: None,
+                    payload_type: None,
+                    after_event_id: Some(first_id),
+                    since: Some(base + Duration::seconds(15)),
+                    until: Some(base + Duration::seconds(30)),
+                    limit: Some(1),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert!(matches!(filtered[0].payload, EventPayload::Thinking { .. }));
     }
 
     #[tokio::test]
