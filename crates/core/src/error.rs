@@ -85,6 +85,7 @@ impl ToolError {
             Self::NotFound(_) => ToolErrorKind::NotFound,
             Self::InvalidParams(_) => ToolErrorKind::InvalidParams,
             Self::ExecutionFailed(_) => ToolErrorKind::ExecutionFailed,
+            Self::MaxDepthExceeded(_) => ToolErrorKind::MaxDepthExceeded,
             Self::Timeout { .. } => ToolErrorKind::Timeout,
             Self::Other(_) => ToolErrorKind::Other,
         }
@@ -174,6 +175,10 @@ mod tests {
         assert_eq!(
             ToolError::ExecutionFailed("segfault".to_string()).kind(),
             ToolErrorKind::ExecutionFailed
+        );
+        assert_eq!(
+            ToolError::MaxDepthExceeded(8).kind(),
+            ToolErrorKind::MaxDepthExceeded
         );
         assert_eq!(
             ToolError::Timeout { timeout_secs: 60 }.kind(),

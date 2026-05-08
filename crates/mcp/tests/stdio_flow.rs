@@ -720,7 +720,11 @@ async fn mcp_resource_tools_register_into_toolset_and_execute() {
         .unwrap();
 
     let listed = set
-        .execute("list_mcp_resources", serde_json::json!({}))
+        .execute(
+            "list_mcp_resources",
+            serde_json::json!({}),
+            &mock_execution_context(),
+        )
         .await
         .unwrap();
     assert!(listed.stdout.contains("fixture fixture://readme"));
@@ -732,6 +736,7 @@ async fn mcp_resource_tools_register_into_toolset_and_execute() {
                 "server": "fixture",
                 "uri": "fixture://readme"
             }),
+            &mock_execution_context(),
         )
         .await
         .unwrap();
@@ -755,7 +760,10 @@ async fn list_mcp_resources_handles_empty_servers() {
     manager.connect_all().await;
     let tool = ListMcpResourcesTool::new(Arc::new(manager));
 
-    let result = tool.execute(serde_json::json!({})).await.unwrap();
+    let result = tool
+        .execute(serde_json::json!({}), &mock_execution_context())
+        .await
+        .unwrap();
     assert_eq!(result.stdout, "(no MCP resources)");
 }
 
@@ -764,7 +772,10 @@ async fn list_mcp_resources_rejects_non_object_params() {
     let manager = Arc::new(McpClientManager::new(HashMap::new()));
     let tool = ListMcpResourcesTool::new(manager);
 
-    let err = tool.execute(serde_json::json!(["bad"])).await.unwrap_err();
+    let err = tool
+        .execute(serde_json::json!(["bad"]), &mock_execution_context())
+        .await
+        .unwrap_err();
     assert!(matches!(err, lattice_core::ToolError::InvalidParams(_)));
 }
 
@@ -774,7 +785,10 @@ async fn read_mcp_resource_rejects_invalid_params() {
     let tool = ReadMcpResourceTool::new(manager);
 
     let err = tool
-        .execute(serde_json::json!({ "server": 1, "uri": true }))
+        .execute(
+            serde_json::json!({ "server": 1, "uri": true }),
+            &mock_execution_context(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, lattice_core::ToolError::InvalidParams(_)));

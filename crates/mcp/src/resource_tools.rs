@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lattice_core::{ExecutionResult, ToolDescription, ToolError, ToolExecutor};
+use lattice_core::{ExecutionContext, ExecutionResult, ToolDescription, ToolError, ToolExecutor};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -32,7 +32,11 @@ impl ToolExecutor for ListMcpResourcesTool {
         }
     }
 
-    async fn execute(&self, params: Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         validate_noop_params(params)?;
 
         let resources = self.manager.list_resources();
@@ -103,7 +107,11 @@ impl ToolExecutor for ReadMcpResourceTool {
         }
     }
 
-    async fn execute(&self, params: Value) -> Result<ExecutionResult, ToolError> {
+    async fn execute(
+        &self,
+        params: Value,
+        _ctx: &ExecutionContext,
+    ) -> Result<ExecutionResult, ToolError> {
         let parsed: ReadMcpResourceParams = serde_json::from_value(params).map_err(|err| {
             ToolError::InvalidParams(format!("invalid read_mcp_resource arguments: {err}"))
         })?;

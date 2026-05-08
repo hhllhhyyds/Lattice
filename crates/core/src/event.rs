@@ -37,6 +37,8 @@ pub enum ToolErrorKind {
     InvalidParams,
     /// Tool execution failed after starting.
     ExecutionFailed,
+    /// Skill recursion exceeded the configured depth limit.
+    MaxDepthExceeded,
     /// Tool execution exceeded a timeout.
     Timeout,
     /// Fallback for uncategorized errors.
@@ -50,6 +52,7 @@ impl ToolErrorKind {
             Self::NotFound => "not_found",
             Self::InvalidParams => "invalid_params",
             Self::ExecutionFailed => "execution_failed",
+            Self::MaxDepthExceeded => "max_depth_exceeded",
             Self::Timeout => "timeout",
             Self::Other => "other",
         }
