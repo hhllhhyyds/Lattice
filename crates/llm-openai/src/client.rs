@@ -92,6 +92,7 @@ impl OpenAIClient {
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
+                reasoning_content: None,
             });
         }
 
@@ -105,6 +106,7 @@ impl OpenAIClient {
                         tool_calls: None,
                         tool_call_id: None,
                         name: None,
+                        reasoning_content: None,
                     });
                 }
                 Role::Assistant => {
@@ -125,6 +127,12 @@ impl OpenAIClient {
                         })
                         .collect();
 
+                    // Extract reasoning_content if present (DeepSeek thinking mode).
+                    let reasoning_content = msg.content.iter().find_map(|b| match b {
+                        ContentBlock::Reasoning { content, .. } => Some(content.clone()),
+                        _ => None,
+                    });
+
                     let text = extract_text(&msg.content);
 
                     if tool_uses.is_empty() {
@@ -134,6 +142,7 @@ impl OpenAIClient {
                             tool_calls: None,
                             tool_call_id: None,
                             name: None,
+                            reasoning_content,
                         });
                     } else {
                         result.push(OpenAIMessage {
@@ -142,6 +151,7 @@ impl OpenAIClient {
                             tool_calls: Some(tool_uses),
                             tool_call_id: None,
                             name: None,
+                            reasoning_content,
                         });
                     }
                 }
@@ -160,6 +170,7 @@ impl OpenAIClient {
                                 tool_calls: None,
                                 tool_call_id: Some(tool_use_id.clone()),
                                 name: None,
+                                reasoning_content: None,
                             });
                         }
                     }
@@ -205,11 +216,28 @@ impl OpenAIClient {
                 return Err(LLMError::InvalidResponse("empty tool_calls array".into()));
             }
 
+            let reasoning = msg.reasoning_content;
+
             if tool_calls.len() == 1 {
-                // Single tool call — return ToolUse for backward compatibility
                 let tc = tool_calls.into_iter().next().unwrap();
                 let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                     .unwrap_or_else(|_| serde_json::Value::String(tc.function.arguments.clone()));
+
+                if let Some(r) = reasoning {
+                    // Model attached reasoning_content to this tool call response.
+                    // Return Mixed so the protocol layer can produce ThinkingToolCall.
+                    return Ok(LLMResponse::Mixed {
+                        blocks: vec![
+                            ContentBlock::Text { text: r },
+                            ContentBlock::ToolUse {
+                                id: tc.id,
+                                name: tc.function.name,
+                                input,
+                            },
+                        ],
+                    });
+                }
+
                 return Ok(LLMResponse::ToolUse {
                     id: tc.id,
                     name: tc.function.name,
@@ -431,6 +459,7 @@ mod tests {
                     role: "assistant".into(),
                     content: Some("Hello!".into()),
                     tool_calls: None,
+                    reasoning_content: None,
                 },
                 finish_reason: Some("stop".into()),
             }],
@@ -459,6 +488,8 @@ mod tests {
                             arguments: r#"{"command":"ls"}"#.into(),
                         },
                     }]),
+
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -516,6 +547,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
+                reasoning_content: None,
             }],
             max_tokens: Some(1024),
             tools: vec![],
@@ -646,6 +678,8 @@ mod tests {
                             arguments: r#"{"cmd":"ls"}"#.into(),
                         },
                     }]),
+
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -672,6 +706,7 @@ mod tests {
                     role: "assistant".into(),
                     content: Some("Hello".into()),
                     tool_calls: None,
+                    reasoning_content: None,
                 },
                 finish_reason: Some("stop".into()),
             }],
@@ -736,6 +771,7 @@ mod tests {
                             },
                         },
                     ]),
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -800,6 +836,8 @@ mod tests {
                             arguments: r#"{"command":"ls"}"#.into(),
                         },
                     }]),
+
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -830,6 +868,7 @@ mod tests {
                     role: "assistant".into(),
                     content: None,
                     tool_calls: Some(vec![]),
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -872,6 +911,7 @@ mod tests {
                             },
                         },
                     ]),
+                    reasoning_content: None,
                 },
                 finish_reason: Some("tool_calls".into()),
             }],
@@ -1092,5 +1132,147 @@ mod tests {
         assert!(requests[1].contains("\"role\":\"tool\""));
         assert!(requests[2].contains("\"tool_call_id\""));
         assert!(requests[2].contains("\"role\":\"tool\""));
+    }
+
+    /// When the API response includes reasoning_content alongside tool_calls,
+    /// parse_response should return LLMResponse::Mixed with Text(reasoning) + ToolUse.
+    #[test]
+    fn test_parse_response_with_reasoning_content_returns_mixed() {
+        let client = OpenAIClient::new("key", "deepseek-v4-flash");
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![OpenAIToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: OpenAIFunctionCall {
+                            name: "bash".into(),
+                            arguments: r#"{"command":"ls"}"#.into(),
+                        },
+                    }]),
+                    reasoning_content: Some("I should list the files first".into()),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let result = client.parse_response(response).unwrap();
+        match result {
+            LLMResponse::Mixed { blocks } => {
+                assert_eq!(blocks.len(), 2);
+                match &blocks[0] {
+                    ContentBlock::Text { text } => {
+                        assert_eq!(text, "I should list the files first")
+                    }
+                    other => panic!("expected Text(reasoning), got {:?}", other),
+                }
+                match &blocks[1] {
+                    ContentBlock::ToolUse { name, .. } => assert_eq!(name, "bash"),
+                    other => panic!("expected ToolUse, got {:?}", other),
+                }
+            }
+            other => panic!("expected Mixed, got {:?}", other),
+        }
+    }
+
+    /// When reasoning_content is absent, parse_response keeps existing ToolUse behavior.
+    #[test]
+    fn test_parse_response_without_reasoning_content_is_unchanged() {
+        let client = OpenAIClient::new("key", "gpt-4o");
+        let response = OpenAIResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIResponseMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    tool_calls: Some(vec![OpenAIToolCall {
+                        id: "call_1".into(),
+                        call_type: "function".into(),
+                        function: OpenAIFunctionCall {
+                            name: "bash".into(),
+                            arguments: r#"{"command":"ls"}"#.into(),
+                        },
+                    }]),
+                    reasoning_content: None,
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let result = client.parse_response(response).unwrap();
+        match result {
+            LLMResponse::ToolUse { id, name, .. } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "bash");
+            }
+            other => panic!("expected ToolUse, got {:?}", other),
+        }
+    }
+
+    /// A Reasoning ContentBlock in an assistant message maps to reasoning_content
+    /// in the serialized OpenAI message (so DeepSeek receives it on the next request).
+    #[test]
+    fn test_to_openai_messages_reasoning_block_becomes_reasoning_content() {
+        use lattice_llm_protocol::message::{ContentBlock, Message, Role};
+
+        let client = OpenAIClient::new("key", "deepseek-v4-flash");
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Reasoning {
+                    content: "I should list files".into(),
+                    signature: None,
+                },
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ],
+        }];
+
+        let result = client.to_openai_messages(&messages, "");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "assistant");
+        assert_eq!(
+            result[0].reasoning_content.as_deref(),
+            Some("I should list files")
+        );
+        assert!(result[0].tool_calls.is_some());
+        // reasoning content must NOT appear in the regular content field
+        assert!(result[0].content.is_none());
+    }
+
+    /// reasoning_content is serialized to JSON (so it goes over the wire to the API).
+    #[test]
+    fn test_openai_message_reasoning_content_serializes() {
+        let msg = OpenAIMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: Some("deep thought".into()),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["reasoning_content"], "deep thought");
+    }
+
+    /// reasoning_content is omitted from JSON when None (skip_serializing_if).
+    #[test]
+    fn test_openai_message_reasoning_content_absent_when_none() {
+        let msg = OpenAIMessage {
+            role: "user".into(),
+            content: Some("hi".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert!(json.get("reasoning_content").is_none());
     }
 }

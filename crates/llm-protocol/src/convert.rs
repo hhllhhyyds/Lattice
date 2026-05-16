@@ -13,18 +13,45 @@ use crate::request::ToolSpec;
 pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
     let mut messages: Vec<Message> = Vec::new();
 
-    for event in events {
-        match &event.payload {
+    let mut i = 0;
+    while i < events.len() {
+        match &events[i].payload {
             EventPayload::UserMessage { content } => {
                 messages.push(Message::text(Role::User, content.clone()));
             }
-            EventPayload::Thinking { .. } => {
-                // Internal reasoning — do not include in LLM messages.
-                // The event is preserved in the store for debugging/audit,
-                // but the LLM does not need to see its own prior reasoning.
+            EventPayload::Thinking {
+                reasoning,
+                signature,
+            } => {
+                // If the very next event is a ToolCallRequested, this Thinking came from a
+                // model that attaches reasoning_content to its tool-call response (e.g. DeepSeek
+                // thinking mode). Merge both into a single assistant message so the reasoning
+                // is passed back to the API on the next request.
+                if let Some(next) = events.get(i + 1) {
+                    if let EventPayload::ToolCallRequested { tool, params } = &next.payload {
+                        let id = next.event_id.to_string();
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: vec![
+                                ContentBlock::Reasoning {
+                                    content: reasoning.clone(),
+                                    signature: signature.clone(),
+                                },
+                                ContentBlock::ToolUse {
+                                    id,
+                                    name: tool.clone(),
+                                    input: params.clone(),
+                                },
+                            ],
+                        });
+                        i += 2;
+                        continue;
+                    }
+                }
+                // Standalone Thinking (separate LLM round-trip) — omit from LLM messages.
             }
             EventPayload::ToolCallRequested { tool, params } => {
-                let id = event.event_id.to_string();
+                let id = events[i].event_id.to_string();
                 messages.push(Message {
                     role: Role::Assistant,
                     content: vec![ContentBlock::ToolUse {
@@ -39,7 +66,7 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
                 stderr,
                 exit_code,
             } => {
-                let tool_use_id = tool_use_id_from_parent(event);
+                let tool_use_id = tool_use_id_from_parent(&events[i]);
                 let content = format_tool_result(stdout, stderr, *exit_code);
                 messages.push(Message {
                     role: Role::Tool,
@@ -51,7 +78,7 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
                 });
             }
             EventPayload::ToolCallError { error, error_kind } => {
-                let tool_use_id = tool_use_id_from_parent(event);
+                let tool_use_id = tool_use_id_from_parent(&events[i]);
                 messages.push(Message {
                     role: Role::Tool,
                     content: vec![ContentBlock::ToolResult {
@@ -67,6 +94,7 @@ pub fn events_to_messages(events: &[Event]) -> Vec<Message> {
             // SessionCreated and StateChange carry no conversational content.
             EventPayload::SessionCreated | EventPayload::StateChange { .. } => {}
         }
+        i += 1;
     }
 
     messages
@@ -320,6 +348,7 @@ mod tests {
             }),
             make_event(EventPayload::Thinking {
                 reasoning: "I need to calculate 2+2. The answer is 4.".into(),
+                signature: None,
             }),
             make_event(EventPayload::FinalAnswer { answer: "4".into() }),
         ];
@@ -353,5 +382,189 @@ mod tests {
         let specs = tool_descriptions_to_specs(&tools);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "bash");
+    }
+
+    /// Thinking immediately before ToolCallRequested → single assistant message with
+    /// Reasoning + ToolUse blocks (DeepSeek thinking mode round-trip).
+    #[test]
+    fn test_thinking_paired_with_tool_call_requested() {
+        let thinking_event_id = EventId::new_v4();
+        let tool_event_id = EventId::new_v4();
+        let session_id = SessionId::new_v4();
+        let now = chrono::Utc::now();
+
+        let events = vec![
+            make_event(EventPayload::UserMessage {
+                content: "do something".into(),
+            }),
+            Event {
+                event_id: thinking_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::Thinking {
+                    reasoning: "I should use bash".into(),
+                    signature: None,
+                },
+                parent_event_id: None,
+            },
+            Event {
+                event_id: tool_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "ls"}),
+                },
+                parent_event_id: Some(thinking_event_id),
+            },
+        ];
+
+        let messages = events_to_messages(&events);
+
+        // UserMessage + one combined assistant message (not two separate messages)
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].content.len(), 2);
+
+        match &messages[1].content[0] {
+            ContentBlock::Reasoning { content, .. } => assert_eq!(content, "I should use bash"),
+            other => panic!("expected Reasoning block, got {:?}", other),
+        }
+        match &messages[1].content[1] {
+            ContentBlock::ToolUse { id, name, .. } => {
+                assert_eq!(id, &tool_event_id.to_string());
+                assert_eq!(name, "bash");
+            }
+            other => panic!("expected ToolUse block, got {:?}", other),
+        }
+    }
+
+    /// Standalone Thinking (not followed by ToolCallRequested) is skipped.
+    #[test]
+    fn test_standalone_thinking_before_final_answer_is_skipped() {
+        let events = vec![
+            make_event(EventPayload::UserMessage {
+                content: "hi".into(),
+            }),
+            make_event(EventPayload::Thinking {
+                reasoning: "pondering...".into(),
+                signature: None,
+            }),
+            make_event(EventPayload::FinalAnswer {
+                answer: "hello".into(),
+            }),
+        ];
+
+        let messages = events_to_messages(&events);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
+        match &messages[1].content[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "hello"),
+            other => panic!("expected Text block, got {:?}", other),
+        }
+    }
+
+    /// Thinking paired with ToolCallRequested does not emit a separate ToolCallRequested message.
+    #[test]
+    fn test_thinking_paired_consumes_both_events() {
+        let session_id = SessionId::new_v4();
+        let now = chrono::Utc::now();
+        let tool_event_id = EventId::new_v4();
+
+        let events = vec![
+            make_event(EventPayload::UserMessage {
+                content: "go".into(),
+            }),
+            Event {
+                event_id: EventId::new_v4(),
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::Thinking {
+                    reasoning: "thinking".into(),
+                    signature: None,
+                },
+                parent_event_id: None,
+            },
+            Event {
+                event_id: tool_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "pwd"}),
+                },
+                parent_event_id: None,
+            },
+            make_event_with_parent(
+                EventPayload::ToolCallResult {
+                    stdout: "/home\n".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                },
+                Some(tool_event_id),
+            ),
+        ];
+
+        let messages = events_to_messages(&events);
+
+        // user + assistant(reasoning+tooluse) + tool_result = 3 messages
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].content.len(), 2); // Reasoning + ToolUse
+        assert_eq!(messages[2].role, Role::Tool);
+    }
+
+    /// Signature in Thinking event is forwarded into ContentBlock::Reasoning for API round-trip.
+    #[test]
+    fn test_thinking_signature_preserved_in_reasoning_block() {
+        let session_id = SessionId::new_v4();
+        let tool_event_id = EventId::new_v4();
+        let now = chrono::Utc::now();
+
+        let events = vec![
+            make_event(EventPayload::UserMessage {
+                content: "run df".into(),
+            }),
+            Event {
+                event_id: EventId::new_v4(),
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::Thinking {
+                    reasoning: "I should run df -h".into(),
+                    signature: Some("sig-xyz".into()),
+                },
+                parent_event_id: None,
+            },
+            Event {
+                event_id: tool_event_id,
+                session_id,
+                timestamp: now,
+                actor: Actor::LLM,
+                payload: EventPayload::ToolCallRequested {
+                    tool: "bash".into(),
+                    params: serde_json::json!({"command": "df -h"}),
+                },
+                parent_event_id: None,
+            },
+        ];
+
+        let messages = events_to_messages(&events);
+
+        assert_eq!(messages.len(), 2);
+        match &messages[1].content[0] {
+            ContentBlock::Reasoning { content, signature } => {
+                assert_eq!(content, "I should run df -h");
+                assert_eq!(signature, &Some("sig-xyz".into()));
+            }
+            other => panic!("expected Reasoning block with signature, got {:?}", other),
+        }
     }
 }

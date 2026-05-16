@@ -55,12 +55,43 @@ pub fn response_to_decision(response: LLMResponse) -> Result<Decision, LLMError>
                     Ok(Decision::FinalAnswer { answer: text })
                 }
             } else if tool_uses.len() == 1 {
-                // Single tool use — return ToolCall for backward compatibility
+                // Single tool use — check for accompanying reasoning (Reasoning block first,
+                // then fallback to Text blocks for providers that don't use structured reasoning).
+                let (reasoning, signature) = blocks
+                    .iter()
+                    .find_map(|b| {
+                        if let ContentBlock::Reasoning { content, signature } = b {
+                            Some((content.clone(), signature.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        let text = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        (text, None)
+                    });
+
                 let (_, name, input) = tool_uses.into_iter().next().unwrap();
-                Ok(Decision::ToolCall {
-                    tool: name,
-                    params: input,
-                })
+                if reasoning.is_empty() {
+                    Ok(Decision::ToolCall {
+                        tool: name,
+                        params: input,
+                    })
+                } else {
+                    Ok(Decision::ThinkingToolCall {
+                        reasoning,
+                        signature,
+                        tool: name,
+                        params: input,
+                    })
+                }
             } else {
                 // Multiple tool uses — return MultiToolCall
                 use lattice_core::llm::ToolCallRequest;
@@ -128,9 +159,15 @@ mod tests {
             ],
         };
         let decision = response_to_decision(resp).unwrap();
+        // Text alongside a ToolUse is treated as reasoning (ThinkingToolCall).
         match decision {
-            Decision::ToolCall { tool, .. } => assert_eq!(tool, "bash"),
-            _ => panic!("expected ToolCall"),
+            Decision::ThinkingToolCall {
+                tool, reasoning, ..
+            } => {
+                assert_eq!(tool, "bash");
+                assert_eq!(reasoning, "thinking...");
+            }
+            _ => panic!("expected ThinkingToolCall, got {:?}", decision),
         }
     }
 
@@ -206,9 +243,9 @@ mod tests {
         }
     }
 
-    /// Test backward compatibility: single ToolUse should still return ToolCall
+    /// Text alongside a single ToolUse is treated as reasoning and returns ThinkingToolCall.
     #[test]
-    fn test_mixed_with_single_tool_use_returns_tool_call() {
+    fn test_mixed_with_single_tool_use_returns_thinking_tool_call() {
         let resp = LLMResponse::Mixed {
             blocks: vec![
                 ContentBlock::Text {
@@ -224,12 +261,18 @@ mod tests {
 
         let decision = response_to_decision(resp).unwrap();
         match decision {
-            Decision::ToolCall { tool, params } => {
+            Decision::ThinkingToolCall {
+                reasoning,
+                tool,
+                params,
+                ..
+            } => {
+                assert_eq!(reasoning, "Let me check");
                 assert_eq!(tool, "bash");
                 assert_eq!(params, serde_json::json!({"command": "ls"}));
             }
             _ => panic!(
-                "expected ToolCall for backward compatibility, got {:?}",
+                "expected ThinkingToolCall for text+tool_use, got {:?}",
                 decision
             ),
         }
@@ -287,6 +330,92 @@ mod tests {
                 assert_eq!(answer, "part 1\npart 2");
             }
             _ => panic!("expected FinalAnswer, got {:?}", decision),
+        }
+    }
+
+    /// Mixed with reasoning text + single ToolUse → ThinkingToolCall (DeepSeek thinking mode).
+    /// Reasoning block (Anthropic thinking mode) + ToolUse → ThinkingToolCall with signature.
+    #[test]
+    fn test_mixed_with_reasoning_block_and_tool_use() {
+        let resp = LLMResponse::Mixed {
+            blocks: vec![
+                ContentBlock::Reasoning {
+                    content: "I should run df -h.".into(),
+                    signature: Some("sig-abc123".into()),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "df -h"}),
+                },
+            ],
+        };
+        let decision = response_to_decision(resp).unwrap();
+        match decision {
+            Decision::ThinkingToolCall {
+                reasoning,
+                signature,
+                tool,
+                params,
+            } => {
+                assert_eq!(reasoning, "I should run df -h.");
+                assert_eq!(signature, Some("sig-abc123".into()));
+                assert_eq!(tool, "bash");
+                assert_eq!(params["command"], "df -h");
+            }
+            _ => panic!("expected ThinkingToolCall, got {:?}", decision),
+        }
+    }
+
+    #[test]
+    fn test_mixed_with_reasoning_text_and_tool_use_returns_thinking_tool_call() {
+        let resp = LLMResponse::Mixed {
+            blocks: vec![
+                ContentBlock::Text {
+                    text: "let me think about this step by step".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ],
+        };
+
+        let decision = response_to_decision(resp).unwrap();
+        match decision {
+            Decision::ThinkingToolCall {
+                reasoning,
+                tool,
+                params,
+                ..
+            } => {
+                assert_eq!(reasoning, "let me think about this step by step");
+                assert_eq!(tool, "bash");
+                assert_eq!(params["command"], "ls");
+            }
+            _ => panic!("expected ThinkingToolCall, got {:?}", decision),
+        }
+    }
+
+    /// Mixed with NO text + single ToolUse → plain ToolCall (no regression).
+    #[test]
+    fn test_mixed_with_no_text_and_tool_use_returns_tool_call() {
+        let resp = LLMResponse::Mixed {
+            blocks: vec![ContentBlock::ToolUse {
+                id: "call_1".into(),
+                name: "bash".into(),
+                input: serde_json::json!({"command": "pwd"}),
+            }],
+        };
+
+        let decision = response_to_decision(resp).unwrap();
+        match decision {
+            Decision::ToolCall { tool, params } => {
+                assert_eq!(tool, "bash");
+                assert_eq!(params["command"], "pwd");
+            }
+            _ => panic!("expected ToolCall, got {:?}", decision),
         }
     }
 }

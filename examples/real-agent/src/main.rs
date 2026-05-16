@@ -1,15 +1,21 @@
 //! Real agent example — end-to-end with a real LLM.
 //!
+//! All env vars must be set explicitly; there are no defaults.
+//!
 //! Usage:
 //!
 //! ```bash
 //! # OpenAI-compatible (including MiniMax, vLLM, Ollama, etc.)
-//! LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=https://api.minimax.chat/v1 \
-//!   LATTICE_MODEL=MiniMax-M2.7 \
+//! LATTICE_LLM_PROVIDER=openai \
+//!   LATTICE_API_KEY=sk-xxx \
+//!   LATTICE_OPENAI_API_BASE=https://api.minimax.chat/v1 \
+//!   LATTICE_OPENAI_MODEL=MiniMax-M2.7 \
 //!   cargo run -p real-agent -- "List files in the current directory"
 //!
 //! # Anthropic
-//! LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-ant-xxx \
+//! LATTICE_LLM_PROVIDER=anthropic \
+//!   LATTICE_API_KEY=sk-ant-xxx \
+//!   LATTICE_ANTHROPIC_API_BASE=https://api.anthropic.com \
 //!   LATTICE_MODEL=claude-sonnet-4-20250514 \
 //!   cargo run -p real-agent -- "What is the current date?"
 //! ```
@@ -52,33 +58,50 @@ fn main() -> Result<()> {
 }
 
 async fn run(task: String) -> Result<()> {
-    // Read configuration from environment variables.
-    let provider = env::var("LATTICE_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
-    let api_key = env::var("LATTICE_API_KEY").context("LATTICE_API_KEY not set")?;
-    let api_base = env::var("LATTICE_API_BASE").ok();
-    let model = env::var("LATTICE_MODEL").unwrap_or_else(|_| match provider.as_str() {
-        "anthropic" => "claude-sonnet-4-20250514".into(),
-        _ => "gpt-4o".into(),
-    });
+    dotenvy::dotenv().ok();
 
-    info!(provider = %provider, model = %model, "creating LLM client");
+    // Read configuration from environment variables. Every value must be set
+    // explicitly — there are no built-in defaults, so a misconfigured `.env`
+    // fails fast at startup instead of silently calling the wrong endpoint.
+    let provider = env::var("LATTICE_LLM_PROVIDER").context("LATTICE_LLM_PROVIDER not set")?;
+    let api_key = env::var("LATTICE_API_KEY").context("LATTICE_API_KEY not set")?;
+    let (api_base, model) = match provider.as_str() {
+        "anthropic" => {
+            let base = env::var("LATTICE_ANTHROPIC_API_BASE")
+                .or_else(|_| env::var("LATTICE_API_BASE"))
+                .context(
+                    "LATTICE_ANTHROPIC_API_BASE (or LATTICE_API_BASE) not set for anthropic provider",
+                )?;
+            let model = env::var("LATTICE_MODEL")
+                .context("LATTICE_MODEL not set for anthropic provider")?;
+            (base, model)
+        }
+        "openai" | "openai-compatible" => {
+            let base = env::var("LATTICE_OPENAI_API_BASE")
+                .or_else(|_| env::var("LATTICE_API_BASE"))
+                .context(
+                    "LATTICE_OPENAI_API_BASE (or LATTICE_API_BASE) not set for openai provider",
+                )?;
+            let model = env::var("LATTICE_OPENAI_MODEL")
+                .or_else(|_| env::var("LATTICE_MODEL"))
+                .context("LATTICE_OPENAI_MODEL (or LATTICE_MODEL) not set for openai provider")?;
+            (base, model)
+        }
+        other => {
+            bail!("unsupported LATTICE_LLM_PROVIDER '{other}' (expected 'anthropic' or 'openai')")
+        }
+    };
+
+    info!(provider = %provider, model = %model, api_base = %api_base, "creating LLM client");
 
     // Create the LLM client based on provider.
     let llm: Arc<dyn LLMClient> = match provider.as_str() {
-        "anthropic" => {
-            let mut client = lattice::llm_anthropic::AnthropicClient::new(&api_key, &model);
-            if let Some(base) = api_base {
-                client = client.with_base_url(base);
-            }
-            Arc::new(client)
-        }
-        _ => {
-            let mut client = lattice::llm_openai::OpenAIClient::new(&api_key, &model);
-            if let Some(base) = api_base {
-                client = client.with_base_url(base);
-            }
-            Arc::new(client)
-        }
+        "anthropic" => Arc::new(
+            lattice::llm_anthropic::AnthropicClient::new(&api_key, &model).with_base_url(api_base),
+        ),
+        _ => Arc::new(
+            lattice::llm_openai::OpenAIClient::new(&api_key, &model).with_base_url(api_base),
+        ),
     };
 
     // Assemble the agent components.
@@ -162,7 +185,7 @@ async fn run(task: String) -> Result<()> {
             EventPayload::UserMessage { content } => {
                 format!("UserMessage: {}", truncate(content, 80))
             }
-            EventPayload::Thinking { reasoning } => {
+            EventPayload::Thinking { reasoning, .. } => {
                 format!("Thinking: {}", truncate(reasoning, 80))
             }
             EventPayload::ToolCallRequested { tool, params } => {

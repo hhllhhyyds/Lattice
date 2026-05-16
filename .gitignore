@@ -7,3 +7,4 @@ target/
 .env
 .claude/
 debug_files/
+lcov.info

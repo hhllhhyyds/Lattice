@@ -2,35 +2,72 @@
 //!
 //! Run with: cargo test --all-features -- --ignored
 
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_core::{Actor, EventPayload, LLMClient, SessionStore};
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
+use lattice_llm_anthropic::AnthropicClient;
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_llm_openai::OpenAIClient;
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_runtime::ControlLoop;
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_sandbox_local::LocalSandbox;
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_store_memory::MemoryStore;
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use lattice_tools::ToolSet;
 
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
 use std::sync::Arc;
 
-#[cfg(all(feature = "llm-openai", feature = "sandbox-local", feature = "tools"))]
-#[tokio::test]
-#[ignore = "requires LATTICE_API_KEY"]
-async fn test_end_to_end_agent_run() {
-    dotenvy::dotenv().ok();
-
-    let api_key = std::env::var("LATTICE_API_KEY").expect("LATTICE_API_KEY not set in .env");
-    let api_base = std::env::var("LATTICE_API_BASE")
-        .unwrap_or_else(|_| "https://api.minimax.chat/v1".to_string());
-    let model = std::env::var("LATTICE_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".into());
-
-    let llm: Arc<dyn LLMClient> =
-        Arc::new(OpenAIClient::new(&api_key, &model).with_base_url(&api_base));
+/// Shared test body: runs the control loop and asserts a FinalAnswer is produced.
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
+async fn run_e2e(llm: Arc<dyn LLMClient>) {
     let store: Arc<MemoryStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
     let tools = Arc::new(ToolSet::with_defaults(sandbox));
@@ -56,13 +93,12 @@ async fn test_end_to_end_agent_run() {
 
     let control_loop = ControlLoop::with_options(store.clone(), llm, tools, system_prompt, 10);
 
-    let result = control_loop.run(session_id).await;
-
-    // Assert the loop completed successfully and returned a final answer.
-    let answer = result.expect("control loop should complete successfully");
+    let answer = control_loop
+        .run(session_id)
+        .await
+        .expect("control loop should complete successfully");
     println!("Final answer: {answer}");
 
-    // Verify the event log contains SessionCreated and FinalAnswer.
     let events = store
         .get_events(session_id, &lattice_core::EventFilter::default())
         .await
@@ -83,4 +119,64 @@ async fn test_end_to_end_agent_run() {
         "expected FinalAnswer in event log, got: {:?}",
         events
     );
+}
+
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
+#[tokio::test]
+#[ignore = "requires LATTICE_API_KEY and LATTICE_OPENAI_API_BASE"]
+async fn test_end_to_end_openai() {
+    dotenvy::dotenv().ok();
+
+    let Ok(api_key) = std::env::var("LATTICE_API_KEY") else {
+        eprintln!("skipping: LATTICE_API_KEY not set");
+        return;
+    };
+    let Ok(api_base) = std::env::var("LATTICE_OPENAI_API_BASE") else {
+        eprintln!("skipping: LATTICE_OPENAI_API_BASE not set");
+        return;
+    };
+    let model =
+        match std::env::var("LATTICE_OPENAI_MODEL").or_else(|_| std::env::var("LATTICE_MODEL")) {
+            Ok(m) => m,
+            Err(_) => {
+                eprintln!("skipping: LATTICE_OPENAI_MODEL (or LATTICE_MODEL) not set");
+                return;
+            }
+        };
+
+    let llm = Arc::new(OpenAIClient::new(&api_key, &model).with_base_url(&api_base));
+    run_e2e(llm).await;
+}
+
+#[cfg(all(
+    feature = "llm-openai",
+    feature = "llm-anthropic",
+    feature = "sandbox-local",
+    feature = "tools"
+))]
+#[tokio::test]
+#[ignore = "requires LATTICE_API_KEY and LATTICE_ANTHROPIC_API_BASE"]
+async fn test_end_to_end_anthropic() {
+    dotenvy::dotenv().ok();
+
+    let Ok(api_key) = std::env::var("LATTICE_API_KEY") else {
+        eprintln!("skipping: LATTICE_API_KEY not set");
+        return;
+    };
+    let Ok(api_base) = std::env::var("LATTICE_ANTHROPIC_API_BASE") else {
+        eprintln!("skipping: LATTICE_ANTHROPIC_API_BASE not set");
+        return;
+    };
+    let Ok(model) = std::env::var("LATTICE_MODEL") else {
+        eprintln!("skipping: LATTICE_MODEL not set");
+        return;
+    };
+
+    let llm = Arc::new(AnthropicClient::new(&api_key, &model).with_base_url(&api_base));
+    run_e2e(llm).await;
 }

@@ -101,6 +101,7 @@ impl ControlLoop {
                             session_id,
                             EventPayload::Thinking {
                                 reasoning: reasoning.clone(),
+                                signature: None,
                             },
                             Actor::LLM,
                             events.last().map(|e| e.event_id),
@@ -114,106 +115,53 @@ impl ControlLoop {
                         session_id,
                         timestamp: chrono::Utc::now(),
                         actor: Actor::LLM,
-                        payload: EventPayload::Thinking { reasoning },
+                        payload: EventPayload::Thinking {
+                            reasoning,
+                            signature: None,
+                        },
                         parent_event_id: events.last().map(|e| e.event_id),
                     });
                 }
                 Decision::ToolCall { tool, params } => {
                     info!(?tool, "LLM requested tool call");
-                    let parent_id = events.last().map(|e| e.event_id);
-                    let req_event_id = self
+                    self.execute_tool_call(session_id, tool, params, &mut events)
+                        .await?;
+                    info!("tool call completed, continuing loop");
+                }
+                Decision::ThinkingToolCall {
+                    reasoning,
+                    signature,
+                    tool,
+                    params,
+                } => {
+                    info!(?tool, "LLM requested tool call with thinking");
+                    // Record the reasoning that must be passed back on subsequent requests.
+                    let thinking_event_id = self
                         .store
                         .append_event(
                             session_id,
-                            EventPayload::ToolCallRequested {
-                                tool: tool.clone(),
-                                params: params.clone(),
+                            EventPayload::Thinking {
+                                reasoning: reasoning.clone(),
+                                signature: signature.clone(),
                             },
                             Actor::LLM,
-                            parent_id,
+                            events.last().map(|e| e.event_id),
                         )
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                    // Update local event list
                     events.push(Event {
-                        event_id: req_event_id,
+                        event_id: thinking_event_id,
                         session_id,
                         timestamp: chrono::Utc::now(),
                         actor: Actor::LLM,
-                        payload: EventPayload::ToolCallRequested {
-                            tool: tool.clone(),
-                            params: params.clone(),
+                        payload: EventPayload::Thinking {
+                            reasoning,
+                            signature,
                         },
-                        parent_event_id: parent_id,
+                        parent_event_id: events.last().map(|e| e.event_id),
                     });
-
-                    info!("executing tool: {}", tool);
-                    // Execute the tool and record the result (or error) directly.
-                    match self.tools.execute(&tool, params).await {
-                        Ok(result) => {
-                            info!("tool execution succeeded: exit_code={}", result.exit_code);
-                            let result_event_id = self
-                                .store
-                                .append_event(
-                                    session_id,
-                                    EventPayload::ToolCallResult {
-                                        stdout: result.stdout.clone(),
-                                        stderr: result.stderr.clone(),
-                                        exit_code: result.exit_code,
-                                    },
-                                    Actor::Sandbox,
-                                    Some(req_event_id),
-                                )
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                            // Update local event list
-                            events.push(Event {
-                                event_id: result_event_id,
-                                session_id,
-                                timestamp: chrono::Utc::now(),
-                                actor: Actor::Sandbox,
-                                payload: EventPayload::ToolCallResult {
-                                    stdout: result.stdout,
-                                    stderr: result.stderr,
-                                    exit_code: result.exit_code,
-                                },
-                                parent_event_id: Some(req_event_id),
-                            });
-                        }
-                        Err(e) => {
-                            warn!("tool execution failed: {}", e);
-                            let error_str = e.to_string();
-                            let error_kind = e.kind();
-                            let error_event_id = self
-                                .store
-                                .append_event(
-                                    session_id,
-                                    EventPayload::ToolCallError {
-                                        error: error_str.clone(),
-                                        error_kind,
-                                    },
-                                    Actor::Sandbox,
-                                    Some(req_event_id),
-                                )
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                            // Update local event list
-                            events.push(Event {
-                                event_id: error_event_id,
-                                session_id,
-                                timestamp: chrono::Utc::now(),
-                                actor: Actor::Sandbox,
-                                payload: EventPayload::ToolCallError {
-                                    error: error_str,
-                                    error_kind,
-                                },
-                                parent_event_id: Some(req_event_id),
-                            });
-                        }
-                    }
+                    self.execute_tool_call(session_id, tool, params, &mut events)
+                        .await?;
                     info!("tool call completed, continuing loop");
                 }
                 Decision::MultiToolCall { calls } => {
@@ -364,6 +312,107 @@ impl ControlLoop {
             "max iterations ({}) reached",
             self.max_iterations
         ))
+    }
+
+    /// Append a ToolCallRequested event, execute the tool, and append the result/error event.
+    async fn execute_tool_call(
+        &self,
+        session_id: SessionId,
+        tool: String,
+        params: serde_json::Value,
+        events: &mut Vec<Event>,
+    ) -> anyhow::Result<()> {
+        let parent_id = events.last().map(|e| e.event_id);
+        let req_event_id = self
+            .store
+            .append_event(
+                session_id,
+                EventPayload::ToolCallRequested {
+                    tool: tool.clone(),
+                    params: params.clone(),
+                },
+                Actor::LLM,
+                parent_id,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        events.push(Event {
+            event_id: req_event_id,
+            session_id,
+            timestamp: chrono::Utc::now(),
+            actor: Actor::LLM,
+            payload: EventPayload::ToolCallRequested {
+                tool: tool.clone(),
+                params: params.clone(),
+            },
+            parent_event_id: parent_id,
+        });
+
+        info!("executing tool: {}", tool);
+        match self.tools.execute(&tool, params).await {
+            Ok(result) => {
+                info!("tool execution succeeded: exit_code={}", result.exit_code);
+                let result_event_id = self
+                    .store
+                    .append_event(
+                        session_id,
+                        EventPayload::ToolCallResult {
+                            stdout: result.stdout.clone(),
+                            stderr: result.stderr.clone(),
+                            exit_code: result.exit_code,
+                        },
+                        Actor::Sandbox,
+                        Some(req_event_id),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                events.push(Event {
+                    event_id: result_event_id,
+                    session_id,
+                    timestamp: chrono::Utc::now(),
+                    actor: Actor::Sandbox,
+                    payload: EventPayload::ToolCallResult {
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                        exit_code: result.exit_code,
+                    },
+                    parent_event_id: Some(req_event_id),
+                });
+            }
+            Err(e) => {
+                warn!("tool execution failed: {}", e);
+                let error_str = e.to_string();
+                let error_kind = e.kind();
+                let error_event_id = self
+                    .store
+                    .append_event(
+                        session_id,
+                        EventPayload::ToolCallError {
+                            error: error_str.clone(),
+                            error_kind,
+                        },
+                        Actor::Sandbox,
+                        Some(req_event_id),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                events.push(Event {
+                    event_id: error_event_id,
+                    session_id,
+                    timestamp: chrono::Utc::now(),
+                    actor: Actor::Sandbox,
+                    payload: EventPayload::ToolCallError {
+                        error: error_str,
+                        error_kind,
+                    },
+                    parent_event_id: Some(req_event_id),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

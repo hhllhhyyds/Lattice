@@ -61,6 +61,16 @@ pub enum AnthropicContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    /// Thinking block returned by reasoning-capable models (e.g. DeepSeek-V4-Flash).
+    #[serde(rename = "thinking")]
+    Thinking {
+        /// The reasoning text.
+        thinking: String,
+        /// Opaque signature returned by the API; preserved for round-trip fidelity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[allow(dead_code)]
+        signature: Option<String>,
+    },
 }
 
 /// An Anthropic tool definition.

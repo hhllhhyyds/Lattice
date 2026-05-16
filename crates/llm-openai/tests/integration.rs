@@ -34,13 +34,25 @@ fn make_history(user_msg: &str) -> Vec<Event> {
 }
 
 #[tokio::test]
-#[ignore = "requires LATTICE_API_KEY"]
+#[ignore = "requires LATTICE_API_KEY and LATTICE_OPENAI_API_BASE"]
 async fn test_real_llm_simple_question() {
     dotenvy::dotenv().ok();
-    let api_key = std::env::var("LATTICE_API_KEY").expect("LATTICE_API_KEY not set in .env");
-    let api_base = std::env::var("LATTICE_API_BASE")
-        .unwrap_or_else(|_| "https://api.minimax.chat/v1".to_string());
-    let model = std::env::var("LATTICE_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".into());
+    let Ok(api_key) = std::env::var("LATTICE_API_KEY") else {
+        eprintln!("skipping: LATTICE_API_KEY not set");
+        return;
+    };
+    let Ok(api_base) = std::env::var("LATTICE_OPENAI_API_BASE") else {
+        eprintln!("skipping: LATTICE_OPENAI_API_BASE not set");
+        return;
+    };
+    let model =
+        match std::env::var("LATTICE_OPENAI_MODEL").or_else(|_| std::env::var("LATTICE_MODEL")) {
+            Ok(m) => m,
+            Err(_) => {
+                eprintln!("skipping: LATTICE_OPENAI_MODEL (or LATTICE_MODEL) not set");
+                return;
+            }
+        };
 
     let client = OpenAIClient::new(&api_key, &model).with_base_url(&api_base);
     let history = make_history("What is 2 + 2? Reply with just the number.");
@@ -61,13 +73,25 @@ async fn test_real_llm_simple_question() {
 }
 
 #[tokio::test]
-#[ignore = "requires LATTICE_API_KEY"]
+#[ignore = "requires LATTICE_API_KEY and LATTICE_OPENAI_API_BASE"]
 async fn test_real_llm_tool_call() {
     dotenvy::dotenv().ok();
-    let api_key = std::env::var("LATTICE_API_KEY").expect("LATTICE_API_KEY not set in .env");
-    let api_base = std::env::var("LATTICE_API_BASE")
-        .unwrap_or_else(|_| "https://api.minimax.chat/v1".to_string());
-    let model = std::env::var("LATTICE_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".into());
+    let Ok(api_key) = std::env::var("LATTICE_API_KEY") else {
+        eprintln!("skipping: LATTICE_API_KEY not set");
+        return;
+    };
+    let Ok(api_base) = std::env::var("LATTICE_OPENAI_API_BASE") else {
+        eprintln!("skipping: LATTICE_OPENAI_API_BASE not set");
+        return;
+    };
+    let model =
+        match std::env::var("LATTICE_OPENAI_MODEL").or_else(|_| std::env::var("LATTICE_MODEL")) {
+            Ok(m) => m,
+            Err(_) => {
+                eprintln!("skipping: LATTICE_OPENAI_MODEL (or LATTICE_MODEL) not set");
+                return;
+            }
+        };
 
     let client = OpenAIClient::new(&api_key, &model).with_base_url(&api_base);
     let tools = vec![ToolDescription {
@@ -91,14 +115,16 @@ async fn test_real_llm_tool_call() {
         .await
         .unwrap();
 
-    match decision {
-        Decision::ToolCall { tool, params } => {
-            assert_eq!(tool, "bash");
-            assert!(
-                params.get("command").is_some(),
-                "Expected command param, got: {params}"
-            );
-        }
-        other => panic!("Expected ToolCall, got: {other:?}"),
-    }
+    // Models with thinking mode (e.g. DeepSeek) return ThinkingToolCall when
+    // reasoning_content is present alongside the tool call.
+    let (tool, params) = match decision {
+        Decision::ToolCall { tool, params } => (tool, params),
+        Decision::ThinkingToolCall { tool, params, .. } => (tool, params),
+        other => panic!("Expected ToolCall or ThinkingToolCall, got: {other:?}"),
+    };
+    assert_eq!(tool, "bash");
+    assert!(
+        params.get("command").is_some(),
+        "Expected command param, got: {params}"
+    );
 }

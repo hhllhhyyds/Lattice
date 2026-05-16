@@ -1004,6 +1004,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "dotenvy",
  "futures-core",
  "http-body-util",
  "hyper",
@@ -1380,6 +1381,7 @@ name = "real-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dotenvy",
  "lattice",
  "lattice-mcp",
  "serde_json",

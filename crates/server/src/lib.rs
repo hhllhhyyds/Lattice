@@ -112,6 +112,11 @@ impl LlmClientFactory for EnvLlmClientFactory {
 }
 
 /// Create an LLM client from request overrides and environment variables.
+///
+/// All required values must be explicitly configured — neither the function
+/// args nor the environment may be missing, and there are no built-in
+/// defaults. Returns a descriptive error naming the first missing variable
+/// so the caller (or HTTP request handler) can surface it to the user.
 pub fn create_llm_client(
     provider: Option<&str>,
     model: Option<&str>,
@@ -119,7 +124,9 @@ pub fn create_llm_client(
     let provider = provider
         .map(str::to_owned)
         .or_else(|| env::var("LATTICE_LLM_PROVIDER").ok())
-        .unwrap_or_else(|| "openai".to_string());
+        .ok_or_else(|| {
+            "LATTICE_LLM_PROVIDER must be set (or pass `provider` in the request body)".to_string()
+        })?;
 
     match provider.as_str() {
         "anthropic" => create_anthropic_client(model),
@@ -138,12 +145,19 @@ fn create_anthropic_client(model: Option<&str>) -> Result<Arc<dyn LLMClient>, St
     let model = model
         .map(str::to_owned)
         .or_else(|| env::var("LATTICE_MODEL").ok())
-        .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+        .ok_or_else(|| {
+            "LATTICE_MODEL must be set (or pass `model` in the request body)".to_string()
+        })?;
+    let base_url = env::var("LATTICE_ANTHROPIC_API_BASE")
+        .or_else(|_| env::var("ANTHROPIC_API_BASE"))
+        .or_else(|_| env::var("LATTICE_API_BASE"))
+        .map_err(|_| {
+            "LATTICE_ANTHROPIC_API_BASE (or ANTHROPIC_API_BASE / LATTICE_API_BASE) must be set"
+                .to_string()
+        })?;
 
-    let mut client = lattice_llm_anthropic::AnthropicClient::new(api_key, model);
-    if let Ok(base_url) = env::var("ANTHROPIC_API_BASE").or_else(|_| env::var("LATTICE_API_BASE")) {
-        client = client.with_base_url(base_url);
-    }
+    let client =
+        lattice_llm_anthropic::AnthropicClient::new(api_key, model).with_base_url(base_url);
     Ok(Arc::new(client))
 }
 
@@ -159,19 +173,81 @@ fn create_openai_client(model: Option<&str>) -> Result<Arc<dyn LLMClient>, Strin
         .map_err(|_| "OPENAI_API_KEY or LATTICE_API_KEY must be set".to_string())?;
     let model = model
         .map(str::to_owned)
+        .or_else(|| env::var("LATTICE_OPENAI_MODEL").ok())
         .or_else(|| env::var("LATTICE_MODEL").ok())
-        .unwrap_or_else(|| "gpt-4o".to_string());
+        .ok_or_else(|| {
+            "LATTICE_OPENAI_MODEL or LATTICE_MODEL must be set (or pass `model` in the request body)"
+                .to_string()
+        })?;
+    let base_url = env::var("LATTICE_OPENAI_API_BASE")
+        .or_else(|_| env::var("OPENAI_API_BASE"))
+        .or_else(|_| env::var("LATTICE_API_BASE"))
+        .map_err(|_| {
+            "LATTICE_OPENAI_API_BASE (or OPENAI_API_BASE / LATTICE_API_BASE) must be set"
+                .to_string()
+        })?;
 
-    let mut client = lattice_llm_openai::OpenAIClient::new(api_key, model);
-    if let Ok(base_url) = env::var("OPENAI_API_BASE").or_else(|_| env::var("LATTICE_API_BASE")) {
-        client = client.with_base_url(base_url);
-    }
+    let client = lattice_llm_openai::OpenAIClient::new(api_key, model).with_base_url(base_url);
     Ok(Arc::new(client))
 }
 
 #[cfg(not(feature = "openai"))]
 fn create_openai_client(_model: Option<&str>) -> Result<Arc<dyn LLMClient>, String> {
     Err("openai provider is not enabled in this build".to_string())
+}
+
+/// Snapshot of the default LLM configuration the server would resolve from
+/// the environment for requests that omit `provider`/`model`. Each field is
+/// optional because configuration is no longer permitted to fall back to
+/// built-in defaults — missing values are surfaced as `None` so the startup
+/// banner can show "(not set)" instead of silently lying about what URL the
+/// server would call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultLlmSummary {
+    /// Provider identifier (`anthropic` or `openai`). `None` when
+    /// `LATTICE_LLM_PROVIDER` is not set.
+    pub provider: Option<String>,
+    /// Model name that would be used. `None` when no provider-appropriate
+    /// model variable is set.
+    pub model: Option<String>,
+    /// Base URL the client would call. `None` when no provider-appropriate
+    /// base-URL variable is set.
+    pub api_base: Option<String>,
+}
+
+/// Resolve the default LLM configuration from environment variables.
+///
+/// Mirrors the precedence chain of [`create_llm_client`] but reports a
+/// summary instead of constructing the client. Unlike `create_llm_client`,
+/// this function does not error on missing variables — it returns `None`
+/// for any field that the user has not explicitly configured, so callers
+/// (typically the startup banner) can render a diagnostic view.
+pub fn default_llm_summary() -> DefaultLlmSummary {
+    let provider = env::var("LATTICE_LLM_PROVIDER").ok();
+
+    match provider.as_deref() {
+        Some("anthropic") => DefaultLlmSummary {
+            provider,
+            model: env::var("LATTICE_MODEL").ok(),
+            api_base: env::var("LATTICE_ANTHROPIC_API_BASE")
+                .or_else(|_| env::var("ANTHROPIC_API_BASE"))
+                .or_else(|_| env::var("LATTICE_API_BASE"))
+                .ok(),
+        },
+        // Treat anything else as openai-compatible (matches create_llm_client).
+        // When provider is unset we still resolve the openai-side vars so the
+        // banner shows what is configured; selection is reported as `None`.
+        _ => DefaultLlmSummary {
+            provider,
+            model: env::var("LATTICE_OPENAI_MODEL")
+                .or_else(|_| env::var("LATTICE_MODEL"))
+                .ok(),
+            api_base: env::var("LATTICE_OPENAI_API_BASE")
+                .or_else(|_| env::var("OPENAI_API_BASE"))
+                .or_else(|_| env::var("LATTICE_API_BASE"))
+                .ok(),
+        },
+    }
 }
 
 /// Spawn a real ControlLoop run and update active run state on completion.
@@ -660,6 +736,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("OPENAI_API_KEY", "sk-test");
+            std::env::set_var("LATTICE_OPENAI_API_BASE", "https://example.test/v1");
             std::env::remove_var("LATTICE_API_KEY");
             std::env::remove_var("OPENAI_API_BASE");
             std::env::remove_var("LATTICE_API_BASE");
@@ -670,6 +747,7 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
         }
     }
 
@@ -679,6 +757,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-test");
+            std::env::set_var("LATTICE_ANTHROPIC_API_BASE", "https://example.test");
             std::env::remove_var("LATTICE_API_KEY");
             std::env::remove_var("ANTHROPIC_API_BASE");
             std::env::remove_var("LATTICE_API_BASE");
@@ -689,6 +768,7 @@ mod tests {
 
         unsafe {
             std::env::remove_var("ANTHROPIC_API_KEY");
+            std::env::remove_var("LATTICE_ANTHROPIC_API_BASE");
         }
     }
 
@@ -706,6 +786,225 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.contains("OPENAI_API_KEY"));
+    }
+
+    /// Strict mode: a missing `LATTICE_LLM_PROVIDER` (and no override) is a
+    /// hard error rather than a silent fallback to "openai".
+    #[test]
+    fn create_llm_client_reports_missing_provider() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("LATTICE_LLM_PROVIDER");
+        }
+
+        let err = match create_llm_client(None, None) {
+            Ok(_) => panic!("expected missing provider to fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("LATTICE_LLM_PROVIDER"));
+    }
+
+    /// Strict mode: missing model env var is a hard error rather than the
+    /// old `"gpt-4o"` / `"claude-sonnet-4-20250514"` fallback.
+    #[test]
+    #[cfg(feature = "openai")]
+    fn create_llm_client_reports_missing_openai_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_API_KEY", "sk-test");
+            std::env::set_var("LATTICE_OPENAI_API_BASE", "https://example.test/v1");
+            std::env::remove_var("LATTICE_OPENAI_MODEL");
+            std::env::remove_var("LATTICE_MODEL");
+        }
+
+        let err = match create_llm_client(Some("openai"), None) {
+            Ok(_) => panic!("expected missing model to fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("LATTICE_OPENAI_MODEL") || err.contains("LATTICE_MODEL"));
+
+        unsafe {
+            std::env::remove_var("LATTICE_API_KEY");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+        }
+    }
+
+    /// Strict mode: missing api_base env var is a hard error rather than
+    /// falling back to the client's internal default URL.
+    #[test]
+    #[cfg(feature = "openai")]
+    fn create_llm_client_reports_missing_openai_api_base() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_API_KEY", "sk-test");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+            std::env::remove_var("OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+        }
+
+        let err = match create_llm_client(Some("openai"), Some("gpt-4o")) {
+            Ok(_) => panic!("expected missing api_base to fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("API_BASE"));
+
+        unsafe {
+            std::env::remove_var("LATTICE_API_KEY");
+        }
+    }
+
+    /// `LATTICE_OPENAI_API_BASE` must take precedence over the legacy
+    /// `OPENAI_API_BASE` and the generic `LATTICE_API_BASE`, matching the
+    /// convention used by the test suite and `.env.example`.
+    #[test]
+    #[cfg(feature = "openai")]
+    fn create_llm_client_prefers_lattice_openai_api_base() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_API_KEY", "sk-test");
+            std::env::set_var("LATTICE_OPENAI_API_BASE", "https://primary.example/v1");
+            std::env::set_var("OPENAI_API_BASE", "https://legacy.example/v1");
+            std::env::set_var("LATTICE_API_BASE", "https://generic.example/v1");
+        }
+
+        // Success here only proves the precedence chain compiles cleanly; the
+        // value itself is verified by integration tests, since OpenAIClient
+        // does not expose its base URL. The important part is no panic and
+        // no error on construction.
+        let client = create_llm_client(Some("openai"), Some("gpt-4o"));
+        assert!(client.is_ok(), "expected client construction to succeed");
+
+        unsafe {
+            std::env::remove_var("LATTICE_API_KEY");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+            std::env::remove_var("OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+        }
+    }
+
+    /// `LATTICE_ANTHROPIC_API_BASE` must take precedence over `ANTHROPIC_API_BASE`
+    /// and `LATTICE_API_BASE` for the same reason as the openai case above.
+    #[test]
+    #[cfg(feature = "anthropic")]
+    fn create_llm_client_prefers_lattice_anthropic_api_base() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_API_KEY", "sk-test");
+            std::env::set_var("LATTICE_ANTHROPIC_API_BASE", "https://primary.example");
+            std::env::set_var("ANTHROPIC_API_BASE", "https://legacy.example");
+            std::env::set_var("LATTICE_API_BASE", "https://generic.example");
+        }
+
+        let client = create_llm_client(Some("anthropic"), Some("claude-sonnet-4-20250514"));
+        assert!(client.is_ok());
+
+        unsafe {
+            std::env::remove_var("LATTICE_API_KEY");
+            std::env::remove_var("LATTICE_ANTHROPIC_API_BASE");
+            std::env::remove_var("ANTHROPIC_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+        }
+    }
+
+    /// For OpenAI, `LATTICE_OPENAI_MODEL` overrides the generic `LATTICE_MODEL`
+    /// so a single `.env` can pin different defaults for each provider.
+    #[test]
+    #[cfg(feature = "openai")]
+    fn create_llm_client_prefers_lattice_openai_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_API_KEY", "sk-test");
+            std::env::set_var("LATTICE_OPENAI_API_BASE", "https://example.test/v1");
+            std::env::set_var("LATTICE_OPENAI_MODEL", "gpt-4o");
+            std::env::set_var("LATTICE_MODEL", "deepseek-v4-flash");
+        }
+
+        // Explicit override via the function arg wins over env. Pass `None`
+        // here so the env precedence is what we are testing.
+        let client = create_llm_client(Some("openai"), None);
+        assert!(client.is_ok());
+
+        unsafe {
+            std::env::remove_var("LATTICE_API_KEY");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_OPENAI_MODEL");
+            std::env::remove_var("LATTICE_MODEL");
+        }
+    }
+
+    /// The default summary for the openai provider must reflect the
+    /// provider-prefixed env vars, with all fields returned as `Some`.
+    #[test]
+    fn default_llm_summary_resolves_openai_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_LLM_PROVIDER", "openai");
+            std::env::set_var("LATTICE_OPENAI_API_BASE", "https://primary.example/v1");
+            std::env::set_var("LATTICE_OPENAI_MODEL", "gpt-4o-mini");
+            std::env::remove_var("OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+            std::env::remove_var("LATTICE_MODEL");
+        }
+
+        let summary = default_llm_summary();
+        assert_eq!(summary.provider.as_deref(), Some("openai"));
+        assert_eq!(summary.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(
+            summary.api_base.as_deref(),
+            Some("https://primary.example/v1")
+        );
+
+        unsafe {
+            std::env::remove_var("LATTICE_LLM_PROVIDER");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_OPENAI_MODEL");
+        }
+    }
+
+    /// Strict mode: with no env vars set the summary reports `None` for
+    /// every field so the banner can show `(not set)` instead of silently
+    /// claiming "https://api.openai.com/v1" is in use.
+    #[test]
+    fn default_llm_summary_reports_none_when_unconfigured() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("LATTICE_LLM_PROVIDER");
+            std::env::remove_var("LATTICE_OPENAI_API_BASE");
+            std::env::remove_var("OPENAI_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+            std::env::remove_var("LATTICE_OPENAI_MODEL");
+            std::env::remove_var("LATTICE_MODEL");
+        }
+
+        let summary = default_llm_summary();
+        assert_eq!(summary.provider, None);
+        assert_eq!(summary.model, None);
+        assert_eq!(summary.api_base, None);
+    }
+
+    /// Anthropic summary picks `LATTICE_ANTHROPIC_API_BASE` first and reads
+    /// the model name from `LATTICE_MODEL`.
+    #[test]
+    fn default_llm_summary_resolves_anthropic_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("LATTICE_LLM_PROVIDER", "anthropic");
+            std::env::set_var("LATTICE_ANTHROPIC_API_BASE", "http://10.0.20.110:3001");
+            std::env::set_var("LATTICE_MODEL", "claude-sonnet-4-6");
+            std::env::remove_var("ANTHROPIC_API_BASE");
+            std::env::remove_var("LATTICE_API_BASE");
+        }
+
+        let summary = default_llm_summary();
+        assert_eq!(summary.provider.as_deref(), Some("anthropic"));
+        assert_eq!(summary.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(summary.api_base.as_deref(), Some("http://10.0.20.110:3001"));
+
+        unsafe {
+            std::env::remove_var("LATTICE_LLM_PROVIDER");
+            std::env::remove_var("LATTICE_ANTHROPIC_API_BASE");
+            std::env::remove_var("LATTICE_MODEL");
+        }
     }
 
     #[tokio::test]
@@ -1399,6 +1698,7 @@ mod tests {
                     actor: Actor::LLM,
                     payload: EventPayload::Thinking {
                         reasoning: "second".into(),
+                        signature: None,
                     },
                     parent_event_id: None,
                 },

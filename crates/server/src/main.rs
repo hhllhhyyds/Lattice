@@ -4,12 +4,14 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use lattice_server::{new_state_from_env, router};
+use lattice_server::{default_llm_summary, new_state_from_env, router, DefaultLlmSummary};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
     // Initialize tracing.
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -60,8 +62,20 @@ async fn main() -> anyhow::Result<()> {
     }
     let app = router(state);
 
+    // Resolve the LLM default config for the banner / structured log.
+    // Missing values are reported as `(not set)` so the operator sees what's
+    // unconfigured at a glance — the request-time `create_llm_client` will
+    // error explicitly when a request comes in without overriding the gap.
+    let llm = default_llm_summary();
+    info!(
+        provider = llm.provider.as_deref().unwrap_or("(not set)"),
+        model = llm.model.as_deref().unwrap_or("(not set)"),
+        api_base = llm.api_base.as_deref().unwrap_or("(not set)"),
+        "default LLM configuration"
+    );
+
     // Print startup banner.
-    print_banner(addr);
+    print_banner(addr, &llm);
 
     // Start the server with graceful shutdown.
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -99,7 +113,11 @@ async fn shutdown_signal() {
     }
 }
 
-fn print_banner(addr: SocketAddr) {
+fn print_banner(addr: SocketAddr, llm: &DefaultLlmSummary) {
+    let provider = llm.provider.as_deref().unwrap_or("(not set)");
+    let model = llm.model.as_deref().unwrap_or("(not set)");
+    let api_base = llm.api_base.as_deref().unwrap_or("(not set)");
+
     println!();
     println!("  ██╗      █████╗ ████████╗████████╗██╗ ██████╗███████╗");
     println!("  ██║     ██╔══██╗╚══██╔══╝╚══██╔══╝██║██╔════╝██╔════╝");
@@ -108,10 +126,13 @@ fn print_banner(addr: SocketAddr) {
     println!("  ███████╗██║  ██║   ██║      ██║   ██║╚██████╗███████╗");
     println!("  ╚══════╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚═╝ ╚═════╝╚══════╝");
     println!();
-    println!("  Version: {}", env!("CARGO_PKG_VERSION"));
-    println!("  Address: http://{addr}");
+    println!("  Version:  {}", env!("CARGO_PKG_VERSION"));
+    println!("  Address:  http://{addr}");
     println!("  Features: {}", enabled_features_summary());
-    println!("  Status:  {}", "ready".bright_green());
+    println!("  Provider: {provider}");
+    println!("  Model:    {model}");
+    println!("  API Base: {api_base}");
+    println!("  Status:   {}", "ready".bright_green());
     println!();
 }
 
