@@ -231,6 +231,7 @@ mod tests {
                 id,
                 EventPayload::Thinking {
                     reasoning: "thinking".to_string(),
+                    signature: None,
                 },
                 Actor::LLM,
                 None,
@@ -287,6 +288,7 @@ mod tests {
                 id,
                 EventPayload::Thinking {
                     reasoning: "thinking".to_string(),
+                    signature: None,
                 },
                 Actor::LLM,
                 None,
@@ -359,6 +361,7 @@ mod tests {
                 id,
                 EventPayload::Thinking {
                     reasoning: "second".to_string(),
+                    signature: None,
                 },
                 Actor::LLM,
                 None,

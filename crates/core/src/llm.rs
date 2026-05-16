@@ -32,6 +32,22 @@ pub enum Decision {
         /// Tool parameters as JSON.
         params: serde_json::Value,
     },
+    /// LLM returned thinking text alongside a tool call in the same response.
+    ///
+    /// Used by models that attach `reasoning_content` to their tool-call response
+    /// (e.g. DeepSeek thinking mode). Records a Thinking event and a
+    /// ToolCallRequested event without making an extra LLM round-trip.
+    ThinkingToolCall {
+        /// Reasoning text that must be passed back to the API in subsequent requests.
+        reasoning: String,
+        /// Opaque signature required by some providers (e.g. DeepSeek Anthropic-compat) for round-trip verification.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        /// Name of the tool to invoke.
+        tool: String,
+        /// Tool parameters as JSON.
+        params: serde_json::Value,
+    },
     /// LLM wants to invoke multiple tools sequentially.
     /// All tools will be executed regardless of individual failures.
     MultiToolCall {
@@ -182,6 +198,37 @@ mod tests {
         match deserialized {
             Decision::MultiToolCall { calls } => assert_eq!(calls.len(), 0),
             _ => panic!("expected MultiToolCall"),
+        }
+    }
+
+    #[test]
+    fn test_decision_thinking_tool_call_serialization() {
+        let decision = Decision::ThinkingToolCall {
+            reasoning: "let me think about this".into(),
+            signature: None,
+            tool: "bash".into(),
+            params: serde_json::json!({"command": "ls"}),
+        };
+
+        let json = serde_json::to_value(&decision).unwrap();
+        assert_eq!(json["type"], "thinkingToolCall");
+        assert_eq!(json["reasoning"], "let me think about this");
+        assert_eq!(json["tool"], "bash");
+        assert_eq!(json["params"]["command"], "ls");
+
+        let deserialized: Decision = serde_json::from_value(json).unwrap();
+        match deserialized {
+            Decision::ThinkingToolCall {
+                reasoning,
+                tool,
+                params,
+                ..
+            } => {
+                assert_eq!(reasoning, "let me think about this");
+                assert_eq!(tool, "bash");
+                assert_eq!(params["command"], "ls");
+            }
+            _ => panic!("expected ThinkingToolCall"),
         }
     }
 }

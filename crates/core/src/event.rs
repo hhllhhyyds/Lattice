@@ -65,7 +65,12 @@ pub enum EventPayload {
     /// User submitted a task.
     UserMessage { content: String },
     /// LLM is thinking.
-    Thinking { reasoning: String },
+    Thinking {
+        reasoning: String,
+        /// Opaque signature required by some providers for round-trip verification.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     /// LLM decided to call a tool.
     ToolCallRequested {
         tool: String,
@@ -127,6 +132,7 @@ mod tests {
             },
             EventPayload::Thinking {
                 reasoning: "let me think".to_string(),
+                signature: None,
             },
             EventPayload::ToolCallRequested {
                 tool: "bash".to_string(),

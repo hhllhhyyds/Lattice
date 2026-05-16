@@ -43,15 +43,36 @@ Lattice 是一个 Rust 编写的 Agent 元框架，灵感来自 [Anthropic Manag
 # Mock LLM（无需 API key）
 cargo run --example hello-agent
 
-# 真实 LLM
-LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-ant-xxx \
+# 真实 LLM —— Anthropic 原生 / 兼容协议（如 DeepSeek anthropic 端点）
+LATTICE_LLM_PROVIDER=anthropic \
+  LATTICE_API_KEY=sk-ant-xxx \
+  LATTICE_ANTHROPIC_API_BASE=https://api.anthropic.com \
   LATTICE_MODEL=claude-sonnet-4-6 \
-  cargo run --example real-agent -- "What is 2+2?"
+  cargo run -p real-agent -- "What is 2+2?"
 
-# OpenAI 兼容（包括 MiniMax、vLLM、Ollama 等）
-LATTICE_API_KEY=sk-xxx LATTICE_API_BASE=http://localhost:8000/v1 \
-  cargo run --example real-agent -- "List files"
+# 真实 LLM —— OpenAI 兼容协议（MiniMax、vLLM、Ollama、DeepSeek 等）
+LATTICE_LLM_PROVIDER=openai \
+  LATTICE_API_KEY=sk-xxx \
+  LATTICE_OPENAI_API_BASE=http://localhost:8000/v1 \
+  LATTICE_OPENAI_MODEL=gpt-4o \
+  cargo run -p real-agent -- "List files"
 ```
+
+> 想要批量本地测试？复制 `.env.example` 为 `.env` 填入密钥，然后跑 `bash scripts/test-local.sh` 一键覆盖单测 + 真模型集成测试 + real-agent。
+
+### 环境变量约定
+
+所有二进制（`real-agent`、`lattice-server`、e2e 测试）使用同一套 `LATTICE_*` 命名。**严格模式 — 没有任何默认值，缺失的变量会立刻报错**（`real-agent` / e2e 测试在启动时；`lattice-server` 在第一个未指定 provider/model 的请求到达时）。
+
+| 变量 | 何时必须设置 | 说明 |
+|------|--------------|------|
+| `LATTICE_LLM_PROVIDER` | 总是 | `anthropic` 或 `openai` |
+| `LATTICE_API_KEY` | 总是 | 也接受 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `LATTICE_ANTHROPIC_API_BASE` | provider=anthropic | 也接受 `ANTHROPIC_API_BASE` / `LATTICE_API_BASE` |
+| `LATTICE_OPENAI_API_BASE` | provider=openai | 也接受 `OPENAI_API_BASE` / `LATTICE_API_BASE` |
+| `LATTICE_MODEL` | anthropic 必填；openai 时若未设 `LATTICE_OPENAI_MODEL` 则必填 | Anthropic 唯一模型来源；OpenAI 的 fallback |
+| `LATTICE_OPENAI_MODEL` | openai 时若未设 `LATTICE_MODEL` 则必填 | 仅 openai 读取，优先级高于 `LATTICE_MODEL` |
+| `LATTICE_MCP_CONFIG` | 可选 | MCP JSON 配置路径 |
 
 ## 平台支持
 
@@ -68,16 +89,18 @@ Lattice 支持以下平台：
 ```powershell
 $env:LATTICE_LLM_PROVIDER="anthropic"
 $env:LATTICE_API_KEY="sk-ant-xxx"
+$env:LATTICE_ANTHROPIC_API_BASE="https://api.anthropic.com"
 $env:LATTICE_MODEL="claude-sonnet-4-6"
-cargo run --example real-agent -- "What is 2+2?"
+cargo run -p real-agent -- "What is 2+2?"
 ```
 
 **CMD**：
 ```cmd
 set LATTICE_LLM_PROVIDER=anthropic
 set LATTICE_API_KEY=sk-ant-xxx
+set LATTICE_ANTHROPIC_API_BASE=https://api.anthropic.com
 set LATTICE_MODEL=claude-sonnet-4-6
-cargo run --example real-agent -- "What is 2+2?"
+cargo run -p real-agent -- "What is 2+2?"
 ```
 
 **开发脚本**：
@@ -96,6 +119,30 @@ curl http://localhost:3000/health
 ```text
 http://127.0.0.1:3000
 ```
+
+### 启动横幅（严格模式）
+
+`lattice-server` 启动时会从 env 解析默认 LLM 配置并在 banner 中显示。**严格模式下没有任何默认值**，缺失变量会被诚实地标记为 `(not set)`：
+
+```text
+  Provider: anthropic
+  Model:    claude-sonnet-4-6
+  API Base: https://api.anthropic.com
+  Status:   ready
+```
+
+零配置启动 server 不会报错（方便开发期间逐步配置），但只要请求没有显式带上 `provider` / `model`，就会立刻收到明确的错误，例如：
+
+```text
+HTTP 500
+{ "error": { "code": "internal", "message": "LATTICE_LLM_PROVIDER must be set (or pass `provider` in the request body)" } }
+```
+
+因此推荐两种用法：
+- **服务端预配置**：启动前导出全部所需 env（或用 `.env`），Web UI 留空 Provider/Model 直接发请求
+- **请求级覆盖**：服务端不配置，每个请求显式带 `provider` + `model`（适合多租户/多模型场景）
+
+### Web UI
 
 当前主干内置了一个最小可用 Web UI，可用于：
 
@@ -116,10 +163,13 @@ Web UI 现在已经接入会话级 **SSE 实时事件流**：
 
 ```powershell
 $env:LATTICE_LLM_PROVIDER="openai"
-$env:OPENAI_API_KEY="sk-xxx"
-$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_API_KEY="sk-xxx"
+$env:LATTICE_OPENAI_API_BASE="https://api.openai.com/v1"
+$env:LATTICE_OPENAI_MODEL="gpt-4o"
 cargo run -p lattice-server
 ```
+
+> Server 和 `real-agent`、e2e 测试共用同一套 `LATTICE_*` 变量。可以直接复用 `.env`（自动通过 `dotenvy` 加载），无需在启动 server 前手动 export。
 
 ### Web UI 使用说明
 
@@ -130,20 +180,19 @@ Web UI 底部的发送面板里：
 
 它们的行为是：
 
-- **不填写 `Provider` / `模型`**  
-  本次请求直接使用服务端启动时的默认环境变量
-- **填写 `Provider` / `模型`**  
-  仅覆盖这一次请求的 provider / model
+- **留空** → 使用服务端启动时从 env 解析的值。如果该字段在 env 中也缺失，请求会返回 5xx 并附带具体缺失的变量名
+- **填写** → 仅覆盖这一次请求的对应字段（不会影响其他请求，也不会修改服务端 env）
 
 也就是说，如果你在启动 `lattice-server` 前已经设置好了：
 
 ```powershell
 $env:LATTICE_LLM_PROVIDER="openai"
-$env:LATTICE_API_BASE="https://api.siliconflow.cn/v1"
-$env:LATTICE_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
+$env:LATTICE_API_KEY="your_key"
+$env:LATTICE_OPENAI_API_BASE="https://api.siliconflow.cn/v1"
+$env:LATTICE_OPENAI_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
 ```
 
-那么进入 Web UI 后，`Provider` 和 `模型` 两个输入框都可以留空，直接发送消息即可。
+那么进入 Web UI 后，`Provider` 和 `模型` 两个输入框都可以留空，直接发送消息即可。反过来，如果 env 里缺 `LATTICE_OPENAI_API_BASE`，那么 Web UI 里**也必须显式填写 base URL**（或者重启 server 补上 env），否则请求会失败。
 
 ### Web UI 实时效果
 
@@ -184,8 +233,8 @@ LATTICE_LLM_PROVIDER="openai"
 ```powershell
 $env:LATTICE_LLM_PROVIDER="openai"
 $env:LATTICE_API_KEY="your_key"
-$env:LATTICE_API_BASE="https://api.siliconflow.cn/v1"
-$env:LATTICE_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
+$env:LATTICE_OPENAI_API_BASE="https://api.siliconflow.cn/v1"
+$env:LATTICE_OPENAI_MODEL="Pro/MiniMaxAI/MiniMax-M2.5"
 $env:LATTICE_PORT="3001"
 
 cargo run -p lattice-server
@@ -199,7 +248,7 @@ http://127.0.0.1:3001
 
 如果服务端已经按上面方式启动，Web UI 中推荐：
 
-- `Provider` 留空（使用服务端默认值）
+- `Provider` 留空（继承服务端启动时的 env）
 - `模型` 留空，或显式填写 `Pro/MiniMaxAI/MiniMax-M2.5`
 
 ### MCP 配置接入
@@ -268,7 +317,8 @@ LATTICE_MCP_CONFIG=/path/to/mcp.json
 ```powershell
 $env:LATTICE_LLM_PROVIDER="openai"
 $env:LATTICE_API_KEY="your_key"
-$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_OPENAI_API_BASE="https://api.openai.com/v1"
+$env:LATTICE_OPENAI_MODEL="gpt-4o"
 $env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
 
 cargo run -p real-agent -- "Use the MCP tools to inspect available resources"
@@ -279,7 +329,8 @@ cargo run -p real-agent -- "Use the MCP tools to inspect available resources"
 ```powershell
 $env:LATTICE_LLM_PROVIDER="openai"
 $env:LATTICE_API_KEY="your_key"
-$env:LATTICE_MODEL="gpt-4o"
+$env:LATTICE_OPENAI_API_BASE="https://api.openai.com/v1"
+$env:LATTICE_OPENAI_MODEL="gpt-4o"
 $env:LATTICE_MCP_CONFIG="D:\\path\\to\\mcp.json"
 
 cargo run -p lattice-server
@@ -293,11 +344,10 @@ cargo run -p lattice-server
 
 ## LLM Provider 支持
 
-| Provider         | 包                      | 状态 |
-| ---------------- | ----------------------- | ---- |
-| Anthropic Claude | `lattice-llm-anthropic` | ✅    |
-| OpenAI 兼容      | `lattice-llm-openai`    | ✅    |
-| 自定义 base URL  | via `LATTICE_API_BASE`  | ✅    |
+| Provider         | 包                      | 自定义 base URL | 状态 |
+| ---------------- | ----------------------- | --------------- | ---- |
+| Anthropic Claude | `lattice-llm-anthropic` | `LATTICE_ANTHROPIC_API_BASE` | ✅ |
+| OpenAI 兼容      | `lattice-llm-openai`    | `LATTICE_OPENAI_API_BASE`    | ✅ |
 
 ## 文档
 

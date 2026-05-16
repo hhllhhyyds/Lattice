@@ -112,7 +112,7 @@ impl AnthropicClient {
             }
         }
 
-        let anthropic_blocks = blocks
+        let anthropic_blocks: Vec<AnthropicContentBlock> = blocks
             .iter()
             .map(|b| match b {
                 ContentBlock::Text { text } => AnthropicContentBlock::Text { text: text.clone() },
@@ -129,6 +129,18 @@ impl AnthropicClient {
                     tool_use_id: tool_use_id.clone(),
                     content: content.clone(),
                     is_error: if *is_error { Some(true) } else { None },
+                },
+                ContentBlock::Reasoning { content, signature } => match signature {
+                    // Real Anthropic thinking blocks (e.g. DeepSeek thinking mode) must
+                    // be replayed verbatim with their signature. Without a signature, the
+                    // server rejects the block, so fall back to plain text in that case.
+                    Some(sig) => AnthropicContentBlock::Thinking {
+                        thinking: content.clone(),
+                        signature: Some(sig.clone()),
+                    },
+                    None => AnthropicContentBlock::Text {
+                        text: content.clone(),
+                    },
                 },
             })
             .collect();
@@ -180,6 +192,13 @@ impl AnthropicClient {
                     id: id.clone(),
                     name: name.clone(),
                     input: input.clone(),
+                }),
+                AnthropicContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => Some(ContentBlock::Reasoning {
+                    content: thinking.clone(),
+                    signature: signature.clone(),
                 }),
                 _ => None,
             })
@@ -489,6 +508,76 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_thinking_with_text_response() {
+        let client = AnthropicClient::new("key", "claude");
+        let response = AnthropicResponse {
+            content: vec![
+                AnthropicContentBlock::Thinking {
+                    thinking: "I should answer 4.".into(),
+                    signature: None,
+                },
+                AnthropicContentBlock::Text { text: "4".into() },
+            ],
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+        };
+        let result = client.parse_response(response);
+        match result {
+            LLMResponse::Mixed { blocks } => {
+                assert_eq!(blocks.len(), 2);
+                match &blocks[0] {
+                    ContentBlock::Reasoning { content, .. } => {
+                        assert_eq!(content, "I should answer 4.")
+                    }
+                    _ => panic!("expected Reasoning block"),
+                }
+                match &blocks[1] {
+                    ContentBlock::Text { text } => assert_eq!(text, "4"),
+                    _ => panic!("expected Text block"),
+                }
+            }
+            _ => panic!("expected Mixed response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_thinking_with_tool_use_response() {
+        let client = AnthropicClient::new("key", "claude");
+        let response = AnthropicResponse {
+            content: vec![
+                AnthropicContentBlock::Thinking {
+                    thinking: "I should run ls.".into(),
+                    signature: None,
+                },
+                AnthropicContentBlock::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ],
+            stop_reason: Some("tool_use".into()),
+            usage: None,
+        };
+        let result = client.parse_response(response);
+        match result {
+            LLMResponse::Mixed { blocks } => {
+                assert_eq!(blocks.len(), 2);
+                match &blocks[0] {
+                    ContentBlock::Reasoning { content, .. } => {
+                        assert_eq!(content, "I should run ls.")
+                    }
+                    _ => panic!("expected Reasoning block"),
+                }
+                match &blocks[1] {
+                    ContentBlock::ToolUse { name, .. } => assert_eq!(name, "bash"),
+                    _ => panic!("expected ToolUse block"),
+                }
+            }
+            _ => panic!("expected Mixed response"),
+        }
+    }
+
+    #[test]
     fn test_request_serialization() {
         let request = AnthropicRequest {
             model: "claude-sonnet-4-20250514".into(),
@@ -508,5 +597,70 @@ mod tests {
         assert_eq!(json["messages"][0]["content"], "Hello");
         // tools should be absent (skip_serializing_if empty)
         assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn test_to_anthropic_content_reasoning_becomes_thinking_with_signature() {
+        let client = AnthropicClient::new("key", "claude");
+        let blocks = vec![
+            ContentBlock::Reasoning {
+                content: "I should run ls.".into(),
+                signature: Some("sig-456".into()),
+            },
+            ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            },
+        ];
+        let result = client.to_anthropic_content(&blocks, Role::Assistant);
+        match result {
+            AnthropicContent::Blocks(b) => {
+                assert_eq!(b.len(), 2, "expected 2 blocks (Thinking + ToolUse)");
+                match &b[0] {
+                    AnthropicContentBlock::Thinking {
+                        thinking,
+                        signature,
+                    } => {
+                        assert_eq!(thinking, "I should run ls.");
+                        assert_eq!(signature, &Some("sig-456".into()));
+                    }
+                    _ => panic!("expected Thinking block as first element"),
+                }
+            }
+            _ => panic!("expected Blocks"),
+        }
+    }
+
+    /// Reasoning without a signature must NOT be emitted as a Thinking block —
+    /// Anthropic's API rejects thinking blocks that lack a signature. Fall back
+    /// to plain Text so the model's intent (preceding chat text) is preserved.
+    #[test]
+    fn test_to_anthropic_content_reasoning_without_signature_becomes_text() {
+        let client = AnthropicClient::new("key", "claude");
+        let blocks = vec![
+            ContentBlock::Reasoning {
+                content: "Let me check disk usage.".into(),
+                signature: None,
+            },
+            ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "sh".into(),
+                input: serde_json::json!({"command": "df -h"}),
+            },
+        ];
+        let result = client.to_anthropic_content(&blocks, Role::Assistant);
+        match result {
+            AnthropicContent::Blocks(b) => {
+                assert_eq!(b.len(), 2);
+                match &b[0] {
+                    AnthropicContentBlock::Text { text } => {
+                        assert_eq!(text, "Let me check disk usage.");
+                    }
+                    other => panic!("expected Text block, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Blocks"),
+        }
     }
 }

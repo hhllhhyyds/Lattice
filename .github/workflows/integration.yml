@@ -1,0 +1,85 @@
+name: Integration (real LLM)
+
+# Runs the ignored integration tests against real LLM endpoints.
+# - OpenAI format: GitHub Models, authenticated via the workflow's GITHUB_TOKEN.
+# - Anthropic format: DeepSeek's Anthropic-compatible endpoint, gated on the
+#   DEEPSEEK_API_KEY repository secret.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  openai:
+    name: OpenAI (GitHub Models)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      models: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: e2e + llm-openai integration
+        env:
+          LATTICE_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LATTICE_OPENAI_API_BASE: https://models.github.ai/inference
+          LATTICE_OPENAI_MODEL: openai/gpt-4o-mini
+        run: |
+          cargo test --workspace --all-features test_end_to_end_openai -- --ignored
+          cargo test -p lattice-llm-openai --all-features -- --ignored
+
+      - name: real-agent (openai)
+        env:
+          LATTICE_LLM_PROVIDER: openai
+          LATTICE_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LATTICE_OPENAI_API_BASE: https://models.github.ai/inference
+          LATTICE_OPENAI_MODEL: openai/gpt-4o-mini
+        run: cargo run --all-features -p real-agent -- "What is 2 + 2? Reply with just the number."
+
+  anthropic:
+    name: Anthropic (DeepSeek)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret availability
+        id: gate
+        env:
+          KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DEEPSEEK_API_KEY not configured; skipping Anthropic integration"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.ready == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.ready == 'true'
+
+      - name: e2e (anthropic)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          LATTICE_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LATTICE_ANTHROPIC_API_BASE: https://api.deepseek.com/anthropic
+          LATTICE_MODEL: deepseek-chat
+        run: cargo test --workspace --all-features test_end_to_end_anthropic -- --ignored
+
+      - name: real-agent (anthropic)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          LATTICE_LLM_PROVIDER: anthropic
+          LATTICE_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LATTICE_ANTHROPIC_API_BASE: https://api.deepseek.com/anthropic
+          LATTICE_MODEL: deepseek-chat
+        run: cargo run --all-features -p real-agent -- "Run 'echo hello' using the shell tool."

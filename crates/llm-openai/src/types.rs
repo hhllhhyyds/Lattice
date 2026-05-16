@@ -30,6 +30,10 @@ pub struct OpenAIMessage {
     /// Optional name for the message sender.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Reasoning content from thinking-capable models (e.g. DeepSeek thinking mode).
+    /// Must be passed back unchanged in subsequent requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// An OpenAI tool definition.
@@ -89,6 +93,8 @@ pub struct OpenAIResponseMessage {
     pub role: String,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// Reasoning content returned by thinking-capable models (e.g. DeepSeek).
+    pub reasoning_content: Option<String>,
 }
 
 /// Token usage information.

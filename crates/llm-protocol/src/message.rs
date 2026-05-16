@@ -25,6 +25,18 @@ pub enum ContentBlock {
         /// The text content.
         text: String,
     },
+    /// Internal reasoning from a thinking-capable model (e.g. DeepSeek, Claude extended thinking).
+    ///
+    /// Must be passed back to the API in subsequent requests for models that require it.
+    /// The `signature` is an opaque token required by some providers (e.g. DeepSeek Anthropic-compat)
+    /// to verify round-trip integrity.
+    Reasoning {
+        /// The reasoning / thinking content.
+        content: String,
+        /// Opaque signature required by some providers for round-trip verification.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     /// A tool invocation by the assistant.
     ToolUse {
         /// Unique identifier for this tool use (used to correlate results).
