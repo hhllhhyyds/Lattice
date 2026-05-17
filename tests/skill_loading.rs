@@ -33,19 +33,32 @@ async fn skills_dir_loads_all_skills() {
     // Print what we found
     for skill in &skills {
         let desc = skill.description();
-        println!("skill loaded: {} — {}", desc.name, &desc.description[..60.min(desc.description.len())]);
+        println!(
+            "skill loaded: {} — {}",
+            desc.name,
+            &desc.description[..60.min(desc.description.len())]
+        );
     }
 
-    // We expect at least 2 skills (code-review + arcgen-pipeline)
+    // We expect at least the 3 skills we've authored
     assert!(
-        skills.len() >= 2,
-        "expected at least 2 skills, got {}",
+        skills.len() >= 3,
+        "expected at least 3 skills, got {}",
         skills.len()
     );
 
-    let names: Vec<_> = skills.iter().map(|s| s.description().name.clone()).collect();
-    assert!(names.contains(&"skill:code-review".to_string()), "missing skill:code-review");
-    assert!(names.contains(&"skill:arcgen-pipeline".to_string()), "missing skill:arcgen-pipeline");
+    let names: Vec<_> = skills
+        .iter()
+        .map(|s| s.description().name.clone())
+        .collect();
+    assert!(
+        names.contains(&"skill:code-review".to_string()),
+        "missing skill:code-review"
+    );
+    assert!(
+        names.contains(&"skill:arcgen-pipeline".to_string()),
+        "missing skill:arcgen-pipeline"
+    );
 }
 
 #[tokio::test]
@@ -58,6 +71,10 @@ async fn each_skill_has_nonempty_description() {
     for skill in &skills {
         let desc = skill.description();
         assert!(!desc.name.is_empty(), "skill has empty name");
-        assert!(!desc.description.is_empty(), "skill '{}' has empty description", desc.name);
+        assert!(
+            !desc.description.is_empty(),
+            "skill '{}' has empty description",
+            desc.name
+        );
     }
 }
