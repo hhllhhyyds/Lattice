@@ -5,7 +5,9 @@ description: >-
   Use when the user asks to research, investigate, or compile information
   on any subject. Returns structured findings with sources.
 compatibility: Requires internet access
-allowed-tools: bash http_fetch
+allowed-tools:
+  - bash
+  - http_fetch
 metadata:
   author: lattice
   version: "1.0.0"
