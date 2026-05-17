@@ -4,6 +4,44 @@
 
 Lattice 是一个 Rust 编写的 **Agent 元框架**，核心思想来自 Anthropic Managed Agents 架构——将 Agent 的"大脑"（推理决策）与"双手"（工具执行）彻底解耦。
 
+## 开发背景与目标场景
+
+### ArcGen 是什么
+
+ArcGen 是一套光刻 OPC 模型自动校准系统（AMC，Aerial-image Model Calibration）。它以 PanGen 仿真器为计算核心，通过 9 个串行阶段完成从原始量测数据到最终光学模型的全流程校准：
+
+```
+prepare_wizard → prepare_job → findoptics → optical_search → gridparam_search
+    → mask_search → term_selection → resist_tune → model_check
+```
+
+各阶段通过 JSON 文件传递中间结果，支持中断续跑。计算任务通过 Gearman（`192.168.18.116:4730`）分发到多台工作节点（node1: `192.168.18.116`，node2: `192.168.18.117`）并行执行，单次完整 pipeline 耗时 6–12 小时，产生 50–80 GB 数据。
+
+### Lattice 的核心目标：替代 Claude Code 驱动 ArcGen
+
+**Lattice 的首要应用场景就是替代 Claude Code，使用自研框架接大模型跑通 ArcGen 流程。**
+
+原有方案依赖 Claude Code + skill markdown 文件 + MCP 工具层编排各阶段，存在以下局限：
+- 依赖 Claude Code 的专有运行时，不可控、不可扩展
+- Skill 调用链不透明，无法自定义事件溯源和会话树
+- 无法与内部系统（Gearman、PanGen、私有 LLM 接口）深度集成
+
+Lattice 用 `SkillTool + ControlLoop + ToolSet` 替代上述架构，每个 ArcGen pipeline 阶段对应一个 Skill（见 `skills/arcgen-pipeline/SKILL.md`），由顶层 ControlLoop 按需调度，所有中间状态以不可变事件写入 SessionStore，支持断点恢复和审计。
+
+**重要约定**：Lattice 不使用容器沙箱（不需要 `sandbox-local` 的隔离能力），工具直接在本地进程执行，以便访问 PanGen 二进制、NFS 挂载的结果目录和 SSH 工作节点。
+
+### Skill 系统与 ArcGen
+
+`skills/` 目录下的每个子目录对应一个可执行的 Skill Agent：
+
+| Skill | 用途 |
+|-------|------|
+| `skills/arcgen-pipeline/` | ArcGen AMC 完整流程编排（核心目标场景） |
+| `skills/code-review/` | 代码审查辅助 |
+| `skills/web-research/` | 网络调研 |
+
+工具名格式为 `skill__<name>`（双下划线，避免 LLM API 对冒号的限制）。
+
 ## 核心原则（不可违反）
 
 1. **三组件解耦**：Session（事件日志）、Harness/ControlLoop（控制循环）、Sandbox（沙箱）是三个正交的抽象，只通过 trait 接口通信，绝不直接依赖具体实现。
