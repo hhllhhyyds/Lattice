@@ -548,6 +548,29 @@ mod tests {
             Ok(events)
         }
 
+        async fn create_child_session(
+            &self,
+            parent_session_id: SessionId,
+            _skill_name: &str,
+        ) -> Result<(SessionId, Arc<dyn lattice_core::SessionStore>), StoreError> {
+            if parent_session_id != self.session_id {
+                return Err(StoreError::SessionNotFound(parent_session_id));
+            }
+
+            panic!("create_child_session not used in this test")
+        }
+
+        async fn child_sessions(
+            &self,
+            parent_session_id: SessionId,
+        ) -> Result<Vec<lattice_core::ChildSessionInfo>, StoreError> {
+            if parent_session_id != self.session_id {
+                return Err(StoreError::SessionNotFound(parent_session_id));
+            }
+
+            Ok(Vec::new())
+        }
+
         async fn latest_event_id(
             &self,
             session_id: SessionId,

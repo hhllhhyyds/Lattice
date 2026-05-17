@@ -67,6 +67,9 @@ pub enum ToolError {
     /// Tool execution failed.
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
+    /// Maximum skill nesting depth exceeded.
+    #[error("max skill depth {0} exceeded")]
+    MaxDepthExceeded(u32),
     /// Execution timed out.
     #[error("timeout after {timeout_secs}s")]
     Timeout { timeout_secs: u64 },
@@ -82,6 +85,7 @@ impl ToolError {
             Self::NotFound(_) => ToolErrorKind::NotFound,
             Self::InvalidParams(_) => ToolErrorKind::InvalidParams,
             Self::ExecutionFailed(_) => ToolErrorKind::ExecutionFailed,
+            Self::MaxDepthExceeded(_) => ToolErrorKind::MaxDepthExceeded,
             Self::Timeout { .. } => ToolErrorKind::Timeout,
             Self::Other(_) => ToolErrorKind::Other,
         }
@@ -147,6 +151,9 @@ mod tests {
         let err = ToolError::ExecutionFailed("segfault".to_string());
         assert_eq!(err.to_string(), "execution failed: segfault");
 
+        let err = ToolError::MaxDepthExceeded(8);
+        assert_eq!(err.to_string(), "max skill depth 8 exceeded");
+
         let err = ToolError::Timeout { timeout_secs: 60 };
         assert!(err.to_string().contains("60"));
         assert!(err.to_string().contains("timeout"));
@@ -168,6 +175,10 @@ mod tests {
         assert_eq!(
             ToolError::ExecutionFailed("segfault".to_string()).kind(),
             ToolErrorKind::ExecutionFailed
+        );
+        assert_eq!(
+            ToolError::MaxDepthExceeded(8).kind(),
+            ToolErrorKind::MaxDepthExceeded
         );
         assert_eq!(
             ToolError::Timeout { timeout_secs: 60 }.kind(),
