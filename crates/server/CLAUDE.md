@@ -54,6 +54,12 @@ HTTP API server built on axum. Exposes the Lattice agent framework as a REST API
 
 ## Recent Changes
 
+### Task 13.1: Web UI Markdown Rendering (2026-05-17)
+- `index.html`: load `marked` and `DOMPurify` via jsDelivr CDN
+- `app.js`: `renderMessages` now renders assistant messages as markdown (`marked.parse` → `DOMPurify.sanitize` → `div.markdown-body`); user messages unchanged (`<pre>` + `escapeHtml`)
+- `app.css`: added `.markdown-body` prose typography block (headings, lists, code, blockquotes, tables)
+- 6 new TDD tests added, all 52 lib tests passing
+
 ### Task 16: Agent Run API (2026-04-28)
 - Added POST `/v1/sessions/:id/messages` for message submission and agent triggering
 - Added GET `/v1/sessions/:id/messages` for conversation history
