@@ -89,6 +89,7 @@
 | --- | ---------------------------------------------------------------------------------------- | ---------------------- | ---- |
 | 12  | [Facade crate + Feature Flags](12-facade-features.md)                                    | `feat/facade-features` | ✅    |
 | 13  | [Server crate 骨架 + 基础路由](13-server-skeleton.md)                                    | `feat/server-skeleton` | ✅    |
+| 13.1 | [Web UI Markdown 渲染](13.1-ui-markdown-rendering.md)                                  | `feat/ui-markdown-rendering` | ✅ |
 | 14  | [会话管理 API](14-session-api.md)                                                        | `feat/session-api`     | ✅    |
 | 15  | [工具系统：ToolExecutor + ToolSet + 标准工具库](15-tool-system.md)                       | `feat/tool-system`     | ✅    |
 | 16  | [任务提交与 Agent 执行 API](16-agent-run-api.md)                                         | `feat/agent-run-api`   | ⬜    |
