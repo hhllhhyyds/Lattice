@@ -1772,4 +1772,134 @@ mod tests {
         assert_eq!(second_filter.until, Some(base + Duration::seconds(25)));
         assert_eq!(second_filter.limit, Some(101));
     }
+
+    // --- TDD tests for #107: Web UI Markdown Rendering ---
+
+    /// index.html must load the `marked` markdown-parsing library.
+    #[tokio::test]
+    async fn web_ui_index_loads_marked_library() {
+        let app = make_app();
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("marked"),
+            "index.html must load the `marked` library"
+        );
+    }
+
+    /// index.html must load DOMPurify so markdown HTML is sanitised before DOM injection.
+    #[tokio::test]
+    async fn web_ui_index_loads_dompurify() {
+        let app = make_app();
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("DOMPurify"),
+            "index.html must load DOMPurify for HTML sanitisation"
+        );
+    }
+
+    /// app.js must call marked.parse() to convert markdown to HTML for assistant messages.
+    #[tokio::test]
+    async fn web_ui_script_uses_marked_parse() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let js = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            js.contains("marked.parse"),
+            "app.js must call marked.parse() for markdown rendering"
+        );
+    }
+
+    /// app.js must sanitise markdown-generated HTML via DOMPurify before injection.
+    #[tokio::test]
+    async fn web_ui_script_sanitises_with_dompurify() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let js = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            js.contains("DOMPurify.sanitize"),
+            "app.js must sanitise rendered HTML with DOMPurify"
+        );
+    }
+
+    /// app.js must inject assistant content into a div.markdown-body, not a bare <pre>.
+    #[tokio::test]
+    async fn web_ui_script_uses_markdown_body_div_for_assistant() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let js = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            js.contains("markdown-body"),
+            "app.js must use a div with class 'markdown-body' for assistant message content"
+        );
+    }
+
+    /// app.css must define a .markdown-body block for prose typography.
+    #[tokio::test]
+    async fn web_ui_styles_contains_markdown_body_class() {
+        let app = make_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ui/app.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let css = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            css.contains(".markdown-body"),
+            "app.css must define .markdown-body styles for rendered markdown"
+        );
+    }
 }
