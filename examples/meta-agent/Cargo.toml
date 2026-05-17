@@ -1,0 +1,17 @@
+[package]
+name = "meta-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lattice = { path = "../..", features = ["runtime", "store-memory", "sandbox-local", "llm-anthropic", "llm-openai", "tools", "skill"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+dotenvy = {workspace = true}
