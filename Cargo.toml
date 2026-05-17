@@ -41,6 +41,7 @@ full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools", "skill"]
 dotenvy = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
+async-trait = { workspace = true }
 
 [dependencies]
 lattice-core = { path = "crates/core" }
