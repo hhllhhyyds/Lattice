@@ -11,6 +11,7 @@
 //! | `store-memory` | ✅ | In-memory SessionStore implementation |
 //! | `sandbox-local` | ✅ | Local process Sandbox implementation |
 //! | `tools` | ✅ | ToolSet registry + standard tools |
+//! | `skill` | ❌ | Skill system (SkillLoader, SkillTool, SkillToolSet) |
 //! | `llm-protocol` | ❌ | Common LLM protocol layer |
 //! | `llm-anthropic` | ❌ | Anthropic Claude LLM backend |
 //! | `llm-openai` | ❌ | OpenAI-compatible LLM backend |
@@ -35,6 +36,10 @@ pub use lattice_sandbox_local as sandbox_local;
 /// ToolSet registry and standard tool implementations.
 #[cfg(feature = "tools")]
 pub use lattice_tools as tools;
+
+/// Skill system — skill loading, SkillTool, and SkillToolSet.
+#[cfg(feature = "skill")]
+pub use lattice_skill as skill;
 
 /// Common LLM protocol layer.
 #[cfg(feature = "llm-protocol")]

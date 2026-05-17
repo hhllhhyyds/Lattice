@@ -32,6 +32,22 @@ run_real_agent() {
   fi
 }
 
+run_meta_agent() {
+  local provider=$1
+  local tmp
+  tmp=$(mktemp)
+  if LATTICE_LLM_PROVIDER="$provider" cargo run -p meta-agent >"$tmp" 2>&1; then
+    grep -E "Meta Agent Answer|^error" "$tmp" || true
+    rm -f "$tmp"
+  else
+    echo "meta-agent ($provider) FAILED" >&2
+    echo "----- full output -----" >&2
+    cat "$tmp" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
 echo "Running unit tests..."
 cargo test --workspace --all-features
 
@@ -47,6 +63,9 @@ if [ -n "${LATTICE_OPENAI_API_BASE:-}" ]; then
   echo ""
   echo "Running real-agent (openai)..."
   run_real_agent openai "列出本机磁盘空间."
+  echo ""
+  echo "Running meta-agent (openai)..."
+  run_meta_agent openai
 else
   echo ""
   echo "Skipping real-agent (openai): LATTICE_OPENAI_API_BASE not set"
@@ -59,6 +78,9 @@ if [ -n "${LATTICE_ANTHROPIC_API_BASE:-}" ]; then
   echo ""
   echo "Running real-agent (anthropic)..."
   run_real_agent anthropic "列出本机磁盘空间."
+  echo ""
+  echo "Running meta-agent (anthropic)..."
+  run_meta_agent anthropic
 else
   echo ""
   echo "Skipping real-agent (anthropic): LATTICE_ANTHROPIC_API_BASE not set"

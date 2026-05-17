@@ -24,9 +24,10 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use lattice::core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore};
+use lattice::core::{Actor, EventFilter, EventPayload, LLMClient, SessionStore, ToolExecutor};
 use lattice::runtime::ControlLoop;
 use lattice::sandbox_local::LocalSandbox;
+use lattice::skill::SkillLoader;
 use lattice::store_memory::MemoryStore;
 use lattice::tools::ToolSet;
 use tracing::{info, warn};
@@ -106,13 +107,15 @@ async fn run(task: String) -> Result<()> {
 
     // Assemble the agent components.
     let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
-    let sandbox = Arc::new(LocalSandbox::new());
-    let mut tools = ToolSet::with_defaults(sandbox);
+    let sandbox: Arc<dyn lattice::core::Sandbox> = Arc::new(LocalSandbox::new());
+
+    // Phase 1: base tools — these are inherited by skill child loops.
+    let mut base_tools = ToolSet::with_defaults(Arc::clone(&sandbox));
     let mcp_manager = lattice_mcp::load_mcp_manager_from_env()
         .await
         .map_err(anyhow::Error::msg)?;
     if let Some(manager) = &mcp_manager {
-        lattice_mcp::register_mcp_tools(&mut tools, Arc::clone(manager))?;
+        lattice_mcp::register_mcp_tools(&mut base_tools, Arc::clone(manager))?;
         for snapshot in manager.list_status_snapshots() {
             match snapshot.state {
                 lattice_mcp::McpConnectionState::Connected => {
@@ -138,14 +141,37 @@ async fn run(task: String) -> Result<()> {
             }
         }
     }
-    let tools = Arc::new(tools);
+    let parent_tools = Arc::new(base_tools);
+
+    // Load skills from ./skills/ — each SkillTool spawns a child ControlLoop
+    // that inherits parent_tools (minus any allowed-tools restrictions).
+    let skill_loader = SkillLoader::new("./skills");
+    let skill_tools = skill_loader
+        .load_all(Arc::clone(&parent_tools), Arc::clone(&llm))
+        .await;
+    info!(count = skill_tools.len(), "skills loaded");
+
+    // Phase 2: agent tools = base tools + loaded skills.
+    let mut agent_tools = ToolSet::with_defaults(Arc::clone(&sandbox));
+    if let Some(manager) = &mcp_manager {
+        lattice_mcp::register_mcp_tools(&mut agent_tools, Arc::clone(manager))?;
+    }
+    for skill in skill_tools {
+        let name = skill.description().name.clone();
+        match agent_tools.register(skill) {
+            Ok(()) => info!(skill = %name, "skill registered"),
+            Err(e) => warn!(skill = %name, error = %e, "skill registration failed"),
+        }
+    }
+    let tools = Arc::new(agent_tools);
     let control_loop = ControlLoop::with_options(
         store.clone(),
         llm,
         tools,
-        "You are a helpful agent. You can execute bash commands using the bash tool. \
-         Always use the bash tool when you need to interact with the system. \
-         After getting the tool result, provide a clear final answer to the user."
+        "You are a helpful agent. You can execute shell commands using the sh tool. \
+         Specialized sub-agents are available as skill tools (names prefixed with 'skill:'); \
+         use them when the task matches their description. \
+         After getting all the information you need, provide a clear final answer."
             .into(),
         20, // max iterations
     );
