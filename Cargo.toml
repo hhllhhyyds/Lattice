@@ -26,7 +26,7 @@ sandbox-local = ["dep:lattice-sandbox-local"]
 tools = ["dep:lattice-tools"]
 
 # Skill system
-skill = ["dep:lattice-skill", "tools"]
+skill = ["dep:lattice-skill", "runtime", "tools"]
 
 # LLM backends
 llm-protocol = ["dep:lattice-llm-protocol"]

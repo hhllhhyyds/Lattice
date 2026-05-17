@@ -11,6 +11,7 @@
 //! | `store-memory` | ✅ | In-memory SessionStore implementation |
 //! | `sandbox-local` | ✅ | Local process Sandbox implementation |
 //! | `tools` | ✅ | ToolSet registry + standard tools |
+//! | `skill` | ❌ | Skill system (SkillLoader, SkillTool, SkillToolSet) |
 //! | `llm-protocol` | ❌ | Common LLM protocol layer |
 //! | `llm-anthropic` | ❌ | Anthropic Claude LLM backend |
 //! | `llm-openai` | ❌ | OpenAI-compatible LLM backend |
