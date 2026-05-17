@@ -545,7 +545,13 @@ impl ControlLoop {
         });
 
         info!("executing tool: {}", tool);
-        match self.tools.execute(&tool, params).await {
+        let ctx = ExecutionContext {
+            session_id,
+            trigger_event_id: req_event_id,
+            store: Arc::clone(&self.store),
+            depth: self.depth,
+        };
+        match self.tools.execute(&tool, params, &ctx).await {
             Ok(result) => {
                 info!("tool execution succeeded: exit_code={}", result.exit_code);
                 let result_event_id = self

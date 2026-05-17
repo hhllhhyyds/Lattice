@@ -885,6 +885,7 @@ dependencies = [
  "lattice-llm-protocol",
  "lattice-runtime",
  "lattice-sandbox-local",
+ "lattice-skill",
  "lattice-store-memory",
  "lattice-tools",
  "tokio",
