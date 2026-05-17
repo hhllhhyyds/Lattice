@@ -151,10 +151,20 @@ function renderMessages(messages) {
   messages.forEach((message) => {
     const item = document.createElement("article");
     item.className = `message-item ${message.role}`;
-    item.innerHTML = `
-      <p class="message-meta">${escapeHtml(message.role)} · ${formatTime(message.timestamp)}</p>
-      <pre class="message-content">${escapeHtml(message.content)}</pre>
-    `;
+
+    if (message.role === "assistant") {
+      const safeHtml = DOMPurify.sanitize(marked.parse(message.content));
+      item.innerHTML = `
+        <p class="message-meta">${escapeHtml(message.role)} · ${formatTime(message.timestamp)}</p>
+        <div class="message-content markdown-body">${safeHtml}</div>
+      `;
+    } else {
+      item.innerHTML = `
+        <p class="message-meta">${escapeHtml(message.role)} · ${formatTime(message.timestamp)}</p>
+        <pre class="message-content">${escapeHtml(message.content)}</pre>
+      `;
+    }
+
     el.messageList.appendChild(item);
   });
 }
