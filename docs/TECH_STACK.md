@@ -17,6 +17,8 @@
 | 唯一 ID | uuid (v4) | 事件和会话的唯一标识 |
 | 时间戳 | chrono | UTC 时间戳 |
 | CI/CD | GitHub Actions（后期） | 自动化测试、lint、发布 |
+| Web UI — Markdown 渲染 | marked.js（CDN）| 无构建步骤，纯 ESM，将 LLM 返回的 markdown 转为 HTML |
+| Web UI — HTML 净化 | DOMPurify（CDN）| 在注入 DOM 前净化 marked 生成的 HTML，防止 XSS |
 
 ## 各选型详细说明
 
