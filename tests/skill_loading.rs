@@ -52,12 +52,12 @@ async fn skills_dir_loads_all_skills() {
         .map(|s| s.description().name.clone())
         .collect();
     assert!(
-        names.contains(&"skill:code-review".to_string()),
-        "missing skill:code-review"
+        names.contains(&"skill__code-review".to_string()),
+        "missing skill__code-review"
     );
     assert!(
-        names.contains(&"skill:arcgen-pipeline".to_string()),
-        "missing skill:arcgen-pipeline"
+        names.contains(&"skill__arcgen-pipeline".to_string()),
+        "missing skill__arcgen-pipeline"
     );
 }
 

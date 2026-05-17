@@ -877,6 +877,7 @@ dependencies = [
 name = "lattice"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dotenvy",
  "lattice-core",
@@ -1145,6 +1146,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dotenvy",
  "lattice",
  "serde_json",
  "tokio",

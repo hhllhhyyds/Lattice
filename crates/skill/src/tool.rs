@@ -39,7 +39,7 @@ impl SkillTool {
     }
 
     fn tool_name(&self) -> String {
-        format!("skill:{}", self.definition.name)
+        format!("skill__{}", self.definition.name)
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -280,7 +280,7 @@ mod tests {
             .append_event(
                 session_id,
                 EventPayload::ToolCallRequested {
-                    tool: "skill:web-research".into(),
+                    tool: "skill__web-research".into(),
                     params: serde_json::json!({"input":"x"}),
                 },
                 Actor::LLM,
@@ -317,7 +317,7 @@ mod tests {
             .append_event(
                 parent_session_id,
                 EventPayload::ToolCallRequested {
-                    tool: "skill:web-research".into(),
+                    tool: "skill__web-research".into(),
                     params: serde_json::json!({"input":"hello"}),
                 },
                 Actor::LLM,

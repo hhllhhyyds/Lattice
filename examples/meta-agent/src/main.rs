@@ -7,8 +7,9 @@
 //! Run with:
 //!   cargo run --example meta-agent
 //!
-//! With real LLM (requires ANTHROPIC_API_KEY):
-//!   ANTHROPIC_API_KEY=sk-... cargo run --example meta-agent
+//! With real LLM (requires LATTICE_* env vars — see examples/real-agent for details):
+//!   LATTICE_LLM_PROVIDER=anthropic LATTICE_API_KEY=sk-... LATTICE_MODEL=claude-sonnet-4-20250514 \
+//!   LATTICE_ANTHROPIC_API_BASE=https://api.anthropic.com cargo run --example meta-agent
 
 mod mock_llm;
 
@@ -24,8 +25,42 @@ use lattice::tools::ToolSet;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+fn build_llm_client() -> Option<Arc<dyn lattice::core::LLMClient>> {
+    let provider = std::env::var("LATTICE_LLM_PROVIDER").ok()?;
+    let api_key = std::env::var("LATTICE_API_KEY").ok()?;
+    let client: Arc<dyn lattice::core::LLMClient> = match provider.as_str() {
+        "anthropic" => {
+            let base = std::env::var("LATTICE_ANTHROPIC_API_BASE")
+                .or_else(|_| std::env::var("LATTICE_API_BASE"))
+                .ok()?;
+            let model = std::env::var("LATTICE_MODEL").ok()?;
+            info!(model = %model, api_base = %base, "using real Anthropic LLM");
+            Arc::new(
+                lattice::llm_anthropic::AnthropicClient::new(&api_key, &model).with_base_url(base),
+            )
+        }
+        "openai" | "openai-compatible" => {
+            let base = std::env::var("LATTICE_OPENAI_API_BASE")
+                .or_else(|_| std::env::var("LATTICE_API_BASE"))
+                .ok()?;
+            let model = std::env::var("LATTICE_OPENAI_MODEL")
+                .or_else(|_| std::env::var("LATTICE_MODEL"))
+                .ok()?;
+            info!(model = %model, api_base = %base, "using real OpenAI-compatible LLM");
+            Arc::new(lattice::llm_openai::OpenAIClient::new(&api_key, &model).with_base_url(base))
+        }
+        other => {
+            info!("unsupported LATTICE_LLM_PROVIDER '{other}', falling back to mock");
+            return None;
+        }
+    };
+    Some(client)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
@@ -34,18 +69,14 @@ async fn main() -> Result<()> {
     let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
     let sandbox = Arc::new(LocalSandbox::new());
 
-    // Use real LLM if API key is available, otherwise use mock
-    let llm: Arc<dyn lattice::core::LLMClient> =
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            info!("Using real Anthropic LLM");
-            Arc::new(lattice::llm_anthropic::AnthropicClient::new(
-                api_key,
-                "claude-sonnet-4-20250514",
-            ))
-        } else {
-            info!("Using mock LLM (set ANTHROPIC_API_KEY for real LLM)");
+    // Use real LLM if LATTICE_* env vars are set, otherwise fall back to mock.
+    let llm: Arc<dyn lattice::core::LLMClient> = match build_llm_client() {
+        Some(client) => client,
+        None => {
+            info!("Using mock LLM (set LATTICE_LLM_PROVIDER / LATTICE_API_KEY / LATTICE_MODEL for real LLM)");
             Arc::new(mock_llm::MetaAgentMockLLM::new())
-        };
+        }
+    };
 
     // ── 2. Build parent tool set ────────────────────────────────────────────
     let mut tools = ToolSet::with_defaults(sandbox.clone());

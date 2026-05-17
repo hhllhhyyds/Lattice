@@ -20,7 +20,7 @@ Lattice 是一个 Rust 编写的 Agent 元框架，灵感来自 [Anthropic Manag
 | 第二轮 | 真实 LLM 接入：LLM protocol + Anthropic + OpenAI | ✅ 已完成 |
 | 第三轮 | 真实 LLM 验证：端到端跑通 | ✅ 已完成 |
 | 第四轮 | HTTP API 层：REST API + SSE 实时事件流 + Docker 部署 | 🚧 进行中 |
-| 第五轮 | Skill 系统：ExecutionContext + Session Tree + SkillTool + 动态加载 | 📋 规划中 |
+| 第五轮 | Skill 系统：ExecutionContext + Session Tree + SkillTool + 动态加载 | ✅ 已完成 |
 | 第六轮 | 记忆与规划：RuntimeState + Planner trait + LongTermMemory | 📋 规划中 |
 
 ### 核心抽象
@@ -35,7 +35,7 @@ Lattice 是一个 Rust 编写的 Agent 元框架，灵感来自 [Anthropic Manag
 - **Layer 2** — `lattice-tools`：标准工具库（Bash、File、Glob、Grep、HTTP）
 - **Layer 3** — 应用层注入：自定义工具、MCP 桥接、Skill 工具集
 
-**Skill 系统**（第五轮）遵循 [Anthropic Agent Skills](https://www.agentskills.com) 开放标准，skill 作为普通工具调用，背后运行完整子 ControlLoop，实现渐进式披露三层加载。
+**Skill 系统**遵循 [Anthropic Agent Skills](https://www.agentskills.com) 开放标准，skill 作为普通工具调用，背后运行完整子 ControlLoop，实现渐进式披露三层加载。每个 skill 对应 `skills/<name>/SKILL.md`，由 `SkillLoader` 在启动时动态加载并注册为工具（名称格式 `skill__<name>`）。
 
 ## 快速开始
 
@@ -73,6 +73,102 @@ LATTICE_LLM_PROVIDER=openai \
 | `LATTICE_MODEL` | anthropic 必填；openai 时若未设 `LATTICE_OPENAI_MODEL` 则必填 | Anthropic 唯一模型来源；OpenAI 的 fallback |
 | `LATTICE_OPENAI_MODEL` | openai 时若未设 `LATTICE_MODEL` 则必填 | 仅 openai 读取，优先级高于 `LATTICE_MODEL` |
 | `LATTICE_MCP_CONFIG` | 可选 | MCP JSON 配置路径 |
+
+## Skill 系统
+
+Skill 是一个独立的 Agent，封装为普通工具供父 Agent 调用。调用时会在子 Session 中运行完整的 ControlLoop，结果以事件树的形式保存。
+
+### 目录结构
+
+```
+skills/
+├── web-research/
+│   └── SKILL.md
+├── code-review/
+│   └── SKILL.md
+└── my-skill/
+    └── SKILL.md
+```
+
+Lattice 在启动时扫描 `skills/` 目录，每个子目录必须包含一个 `SKILL.md`。
+
+### SKILL.md 格式
+
+```markdown
+---
+name: web-research                          # 必填，唯一标识，≤64 字符
+description: >-                             # 必填，工具描述，≤1024 字符（LLM 选工具时看这个）
+  Deep research on a topic using web search.
+  Use when the user asks to research a subject.
+compatibility: Requires internet access     # 可选，运行环境约束说明
+allowed-tools:                              # 可选，子 Agent 可用的工具白名单
+  - bash
+  - http_fetch
+metadata:                                   # 可选
+  author: lattice
+  version: "1.0.0"
+  tags: [research, web]
+x-lattice:                                  # 可选，Lattice 扩展
+  params:                                   # 声明结构化入参（否则只有 input 字段）
+    depth:
+      type: integer
+      description: Number of search iterations (1-5)
+      required: false
+      default: 3
+---
+
+# 系统提示
+
+这里写 Skill Agent 的 system prompt，告诉它如何完成任务。
+```
+
+**字段说明：**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | skill 的唯一 ID，最终工具名为 `skill__<name>` |
+| `description` | 是 | 父 Agent 选择该 skill 时看到的描述 |
+| `allowed-tools` | 否 | 子 Agent 可调用的工具白名单；省略则继承父 Agent 的全部工具 |
+| `x-lattice.params` | 否 | 声明结构化入参；省略时只有一个 `input` 字符串字段 |
+
+### 运行 meta-agent（带 Skill）
+
+```bash
+# 使用 mock LLM（无需 API key，验证 skill 加载逻辑）
+cargo run -p meta-agent
+
+# 使用真实 LLM
+LATTICE_LLM_PROVIDER=anthropic \
+  LATTICE_API_KEY=sk-ant-xxx \
+  LATTICE_ANTHROPIC_API_BASE=https://api.anthropic.com \
+  LATTICE_MODEL=claude-sonnet-4-6 \
+  cargo run -p meta-agent
+```
+
+meta-agent 启动时会扫描项目根目录的 `skills/`，将每个 skill 注册为工具后运行。日志示例：
+
+```text
+INFO meta_agent: Loaded 3 skill(s)
+INFO meta_agent: Registered skill: skill__web-research
+INFO meta_agent: Registered skill: skill__code-review
+INFO meta_agent: Registered skill: skill__arcgen-pipeline
+```
+
+### 在代码中使用 SkillLoader
+
+```rust
+use lattice::skill::SkillLoader;
+use lattice::tools::ToolSet;
+
+let base_tools = Arc::new(ToolSet::with_defaults(sandbox.clone()));
+let loader = SkillLoader::new("skills/");
+let skills = loader.load_all(base_tools.clone(), llm.clone()).await;
+
+let mut tools = ToolSet::with_defaults(sandbox);
+for skill in skills {
+    tools.register(skill)?;
+}
+```
 
 ## 平台支持
 

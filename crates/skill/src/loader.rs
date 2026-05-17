@@ -210,6 +210,6 @@ mod tests {
             .await;
 
         assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].description().name, "skill:valid");
+        assert_eq!(skills[0].description().name, "skill__valid");
     }
 }
