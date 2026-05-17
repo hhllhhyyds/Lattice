@@ -57,28 +57,28 @@ Lattice 的架构灵感来自 Anthropic 的 Managed Agents 博客（*Scaling Man
 
 ```rust
 /// 事件负载
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum EventPayload {
     SessionCreated,
 
     UserMessage { content: String },
 
-    Thinking { reasoning: String },
+    Thinking {
+        reasoning: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
 
     ToolCallRequested { tool: String, params: serde_json::Value },
 
     ToolCallResult { stdout: String, stderr: String, exit_code: i32 },
 
-    ToolCallError { error: String },
+    ToolCallError { error: String, error_kind: ToolErrorKind },
 
     FinalAnswer { answer: String },
 
     StateChange { from: String, to: String },
-
-    // — Skill 系统扩展 —
-    SkillInvoked { skill_name: String, child_session_id: SessionId },
-    SkillCompleted { skill_name: String, child_session_id: SessionId },
 }
 
 /// 一个不可变事件
@@ -100,6 +100,8 @@ pub struct Event {
 pub trait SessionStore: Send + Sync {
     async fn create_session(&self) -> Result<SessionId, StoreError>;
 
+    async fn delete_session(&self, session_id: SessionId) -> Result<(), StoreError>;
+
     async fn append_event(
         &self,
         session_id: SessionId,
@@ -115,31 +117,12 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<Vec<Event>, StoreError>;
 
     async fn latest_event_id(&self, session_id: SessionId) -> Result<Option<EventId>, StoreError>;
-
-    // — Skill 系统扩展 —
-    async fn create_child_session(
-        &self,
-        parent_session_id: SessionId,
-        skill_name: &str,
-    ) -> Result<(SessionId, Arc<dyn SessionStore>), StoreError>;
-
-    async fn child_sessions(
-        &self,
-        parent_session_id: SessionId,
-    ) -> Result<Vec<ChildSessionInfo>, StoreError>;
 }
 ```
 
 ### Session Tree（Skill 系统）
 
-Session 支持树形扩展：父 session 调用 skill 时创建子 session，子 session 拥有独立的 SessionStore。父 session 的事件日志记录 `SkillInvoked`/`SkillCompleted` 事件，携带子 session ID，供可观测性查询。
-
-```
-Root SessionStore
-├── session-001 (meta agent)
-│   └── SkillInvoked → session-002 (skill: web-research, 独立 MemoryStore)
-└── session-003 (另一个 meta agent)
-```
+Session 支持树形扩展（规划中）：父 session 调用 skill 时创建子 session，子 session 拥有独立的 SessionStore。
 
 ---
 
@@ -162,7 +145,7 @@ loop {
     4. match 决策:
        - FinalAnswer → 记录结果，退出循环
        - Thinking   → 继续循环
-       - ToolCall   → 构造 ExecutionContext，ToolSet.execute()，记录结果/错误，继续循环
+       - ToolCall   → ToolSet.execute()，记录结果/错误，继续循环
 }
 ```
 
@@ -184,23 +167,24 @@ pub trait LLMClient: Send + Sync {
 pub enum Decision {
     Thinking { reasoning: String },
     ToolCall { tool: String, params: serde_json::Value },
+    /// Thinking text returned alongside a tool call in the same response.
+    /// Used by models like DeepSeek that attach reasoning to tool-call responses.
+    ThinkingToolCall {
+        reasoning: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        tool: String,
+        params: serde_json::Value,
+    },
+    /// Multiple tools to invoke sequentially.
+    MultiToolCall { calls: Vec<ToolCallRequest> },
     FinalAnswer { answer: String },
 }
-```
 
-### ExecutionContext
-
-```rust
-/// Maximum allowed skill nesting depth. A meta agent has depth=0;
-/// its direct skill children have depth=1, and so on.
-pub const MAX_SKILL_DEPTH: u32 = 8;
-
-/// Execution context passed to every tool invocation.
-pub struct ExecutionContext {
-    pub session_id: SessionId,
-    pub trigger_event_id: EventId,
-    pub store: Arc<dyn SessionStore>,
-    pub depth: u32,
+pub struct ToolCallRequest {
+    pub id: String,
+    pub tool: String,
+    pub params: serde_json::Value,
 }
 ```
 
@@ -251,7 +235,6 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(
         &self,
         params: serde_json::Value,
-        ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, ToolError>;
 }
 ```
@@ -280,7 +263,6 @@ impl ToolSet {
         &self,
         name: &str,
         params: serde_json::Value,
-        ctx: &ExecutionContext,
     ) -> Result<ExecutionResult, ToolError> { ... }
 }
 ```
@@ -370,24 +352,23 @@ llm-protocol = ["dep:lattice-llm-protocol"]
 llm-anthropic = ["llm-protocol", "dep:lattice-llm-anthropic"]
 llm-openai = ["llm-protocol", "dep:lattice-llm-openai"]
 llm-all = ["llm-anthropic", "llm-openai"]
-skill = ["dep:lattice-skill", "tools"]        # Skill 系统
-full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools", "skill"]
+full = ["runtime", "store-memory", "sandbox-local", "llm-all", "tools"]
 ```
 
 ### Crate 结构
 
 ```
 crates/
-├── core/             # 纯接口：SessionStore, LLMClient, Sandbox, ToolExecutor, ExecutionContext
+├── core/             # 纯接口：SessionStore, LLMClient, Sandbox, ToolExecutor 等所有 trait 和核心类型
 ├── runtime/          # ControlLoop 实现
 ├── store-memory/     # MemoryStore 实现
-├── sandbox-local/   # LocalSandbox 实现（跨平台 shell）
-├── tools/           # ToolSet + 标准工具（BashTool 等）
-├── skill/           # Skill 系统（SkillDefinition, SkillTool, SkillLoader）  # 规划中
-├── llm-protocol/    # LLM 通用协议层
-├── llm-anthropic/   # Anthropic Claude 后端
-├── llm-openai/      # OpenAI 兼容后端
-└── server/          # HTTP API 服务（axum）
+├── sandbox-local/    # LocalSandbox 实现（跨平台 shell）
+├── tools/            # ToolSet + 标准工具（BashTool 等）
+├── mcp/              # MCP 客户端（McpClientManager, McpToolAdapter）
+├── llm-protocol/     # LLM 通用协议层
+├── llm-anthropic/    # Anthropic Claude 后端
+├── llm-openai/       # OpenAI 兼容后端
+└── server/           # HTTP API 服务（axum）
 ```
 
 ---
