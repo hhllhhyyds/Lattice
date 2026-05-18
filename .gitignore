@@ -5,6 +5,7 @@ target/
 *~
 .omc/
 .env
-.claude/
+.claude/*
+!.claude/skills/
 debug_files/
 lcov.info
